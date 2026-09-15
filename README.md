@@ -1,16 +1,25 @@
-# furios_battery — das Akkusymbol faerbt sich nach der Ladeleistung
+# furios_battery — das Akkusymbol sagt, was es weiss
 
 Das FuriPhone zeigt beim Laden einen Blitz und eine Prozentzahl. Beides sieht
 gleich aus, ob ein Watt hineingeht oder sechs — und genau das ist die Zahl,
 die man sehen will: ein muedes Kabel, ein Laptop-Port oder ein Netzteil, das
 sich still neu verhandelt hat, sehen alle aus wie „laedt" und kosten Stunden.
 
-Also: **gruen**, wenn es schnell geht, **orange** dazwischen, **rot**, wenn
-sich kaum etwas bewegt.
+Das Symbol besteht aus zwei Teilen, und die sagen ab jetzt zwei
+verschiedene Dinge:
 
-Wahlweise dasselbe im Akkubetrieb, dort mit umgekehrter Bedeutung — gruen ist
-ein Telefon, das wenig zieht. Das ist ausgeschaltet, bis man es einschaltet:
-eine Farbe, die den ganzen Tag leuchtet, ist keine Nachricht mehr.
+| | was es sagt | |
+|---|---|---|
+| **Huelle und Blitz** | wie schnell sich der Akku bewegt | gruen · orange · rot |
+| **Fuellung** | wie voll er ist | schlicht · orange · rot |
+
+Also: **gruen**, wenn viel hineingeht, **orange** dazwischen, **rot**, wenn
+sich kaum etwas bewegt — und die Fuellung darin faerbt sich unabhaengig
+davon, wenn der Ladestand knapp wird.
+
+Die Farbe der Huelle im Akkubetrieb ist ausgeschaltet, bis man sie
+einschaltet; die Fuellung faerbt sich immer, weil ein fast leerer Akku das
+sagen soll, ob er nun laedt, entlaedt oder voll ist.
 
 ```
 git clone https://github.com/misc-de/furios_battery
@@ -28,15 +37,24 @@ Eine Zeile CSS faerbt es:
 
 ```css
 phosh-battery-info image {
-  color: #2ec27e;
-  -gtk-icon-palette: success #2ec27e, warning #2ec27e, error #2ec27e;
-}
+  color: #e01b24;                                  /* Huelle: 1 W gehen rein */
+  -gtk-icon-palette: success #ff7800, warning #ff7800, error #ff7800;
+}                                                  /* Fuellung: unter 60 %   */
 ```
 
 Zwei Deklarationen, weil das Symbol aus **zwei Pfaden** besteht: Huelle und
-Blitz folgen `color`, die Fuellung (der Ladestand) traegt im Adwaita-SVG
-`class="success"` und kommt aus der Symbol-Palette. Ohne die zweite Zeile
-bleibt die Fuellung weiss in einem roten Akku.
+Blitz folgen `color`, die Fuellung traegt im Adwaita-SVG `class="success"`
+und kommt aus der Symbol-Palette. Ohne die zweite Zeile bleibt die Fuellung
+weiss in einem roten Akku.
+
+Alle drei Palettennamen bekommen dieselbe Farbe, weil die Fuellung unter
+20 % `warning` bzw. `error` heisst — die Farbe soll vom Ladestand kommen und
+nicht davon, welche Datei phosh gerade gegriffen hat.
+
+Fehlt eine der beiden Aussagen, fehlt die Zeile: ein Regelwerk ohne `color`
+laesst die Huelle in der Farbe der Leiste, eines ohne Palette die Fuellung.
+Ein „weiss" hinzuschreiben hiesse, einen Vordergrund zu raten, den wir nicht
+lesen koennen.
 
 Der naheliegende Ort dafuer ist `~/.config/gtk-3.0/gtk.css` — und der ist eine
 Sackgasse: GTK3 liest die Datei **einmal beim Programmstart** und nie wieder.
@@ -50,10 +68,15 @@ Projekt schreibt deshalb drei Themes, die nichts weiter sind als das Theme
 des Nutzers plus jene eine Zeile:
 
 ```
-~/.themes/adw-gtk3-batt5ae1-green/gtk-3.0/gtk.css
+~/.themes/adw-gtk3-batt7e17-red-amber/gtk-3.0/gtk.css
     @import url("file:///usr/share/themes/adw-gtk3/gtk-3.0/gtk.css");
-    phosh-battery-info image { color: #2ec27e; … }
+    phosh-battery-info image { color: …; -gtk-icon-palette: …; }
 ```
+
+Der Name traegt beide Haelften, weil beide in derselben Datei stehen. Die
+Kombinationen werden erst geschrieben, wenn sie gebraucht werden — zwoelf
+Verzeichnisse in `~/.themes` waeren zwoelf Eintraege in jeder Theme-Auswahl
+auf dem Telefon.
 
 Die vier Zeichen im Namen sind die Kennung der Regel. Sie stehen dort, weil
 GTK3 ein benanntes Theme **fuer die Lebensdauer des Prozesses** zwischen-
@@ -71,10 +94,11 @@ der Dienst merkt es, baut auf dem neuen auf und traegt die Farbe hinueber.
 
 ## Schwellen
 
-| | weiss | gruen | orange | rot |
+| | schlicht | gruen | orange | rot |
 |---|---|---|---|---|
-| Laden | — | ab 7 W | ab 3 W | darunter |
-| Entladen | unter 3 W | — | ab 3 W | ab 5 W |
+| Huelle, Laden | — | ab 7 W | ab 3 W | darunter |
+| Huelle, Entladen | unter 3 W | — | ab 3 W | ab 5 W |
+| Fuellung | ueber 60 % | — | unter 60 % | unter 15 % |
 
 Im Akkubetrieb ist **weiss der Normalfall**: ein Telefon, das tut, was ein
 Telefon tut, sagt nichts, und nur ein ungewoehnlicher Verbrauch meldet sich.
@@ -104,6 +128,8 @@ hoechstens 5,9 W - auch die Ladeschwellen sind also noch nicht bestaetigt.
 battctl config charge-green-w 6
 battctl config drain-amber-w 2.5
 battctl config discharging on
+battctl config level-amber-pct 50
+battctl config level off        # Fuellung gar nicht faerben
 battctl config                  # alles, was es gibt
 ```
 
@@ -131,5 +157,5 @@ tests/run-tests.sh      # ohne Display, ohne Akku, ohne root - NIE mit sudo
 tests/coverage.sh
 ```
 
-93 Tests, 88,6 % der Zeilen. Was fehlt, ist die D-Bus-Verdrahtung des Daemons
+107 Tests, 89,2 % der Zeilen. Was fehlt, ist die D-Bus-Verdrahtung des Daemons
 — die wird am Geraet belegt, nicht simuliert (FINDINGS.md).

@@ -103,8 +103,18 @@ deckenden Pixeln rot, mit success=weiss bleiben genau 24 weiss - das ist die
 Fuellung. `Gtk.CssProvider` nimmt die Eigenschaft ohne Parsefehler an.
 
 Alle drei Palettennamen bekommen dieselbe Farbe: unter 20 % ist die Fuellung
-`warning` bzw. `error` statt `success`, und ein Symbol, das aussen gruen und
-innen rot ist, liest sich als Stoerung und nicht als Ladestand.
+`warning` bzw. `error` statt `success`. Die Farbe soll vom Ladestand kommen
+und nicht davon, welche Datei phosh gegriffen hat.
+
+**Und daraus wurde die eigentliche Aufteilung** (Entscheidung des Nutzers,
+15.9. abends): die beiden Pfade sagen zwei verschiedene Dinge — die Huelle
+die Leistung, die Fuellung den Ladestand (schlicht ueber 60 %, orange
+darunter, rot unter 15 %). Beide stehen in derselben Regel, also traegt der
+Theme-Name beide Haelften (`adw-gtk3-batt7e17-red-amber`), und die
+Kombinationen werden erst geschrieben, wenn sie gebraucht werden: zwoelf
+Verzeichnisse in ~/.themes waeren zwoelf Eintraege in jeder Theme-Auswahl.
+Am Geraet belegt, indem die Schwelle kurz auf 90 % gesetzt wurde: rote
+Huelle bei 1,1 W, orange Fuellung bei 85 % — ein Symbol, zwei Aussagen.
 
 ## 5b · GTK3 merkt sich ein Theme nach NAMEN, nicht nach Datei
 

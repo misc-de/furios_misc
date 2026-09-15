@@ -66,18 +66,38 @@ SETTING = "org.gnome.desktop.interface gtk-theme"
 COLORS = {"green": "#2ec27e", "amber": "#ff7800", "red": "#e01b24"}
 BUCKETS = ("green", "amber", "red")
 
-# The rule itself, and it is two declarations because the icon is two paths.
-# The shell and the bolt follow `color`; the level inside carries
-# class="success" in the Adwaita SVG and is drawn from GTK's symbolic
-# palette, which nothing on this phone sets - it came out white inside a red
-# battery. All three palette names get the same colour: below 20 % the fill
-# is "warning" and "error" instead, and an icon that is green outside and red
-# inside reads as a fault rather than as a level.
-RULE = ("phosh-battery-info image {\n"
-        "  color: %(farbe)s;\n"
-        "  -gtk-icon-palette: success %(farbe)s, warning %(farbe)s,"
-        " error %(farbe)s;\n"
-        "}\n")
+# The two halves of the icon, and they say two different things.
+#
+#   the shell and the bolt      how fast the battery is moving  -> `color`
+#   the level inside            how full it is                  -> the palette
+#
+# The level carries class="success" in the Adwaita SVG and is drawn from
+# GTK's symbolic palette, which nothing on this phone sets - it came out
+# white inside a red battery. All three palette names get the same colour,
+# because below 20 % the fill is "warning" and "error" instead, and the
+# level is meant to be one colour whichever file phosh picked.
+#
+# Either declaration may be absent, and that is how "no colour" is said:
+# a rule without `color` leaves the shell in the panel's own foreground, a
+# rule without the palette leaves the level in it. Naming a white would be
+# guessing at a foreground we cannot read.
+RULE_COLOR = "  color: %s;\n"
+RULE_PALETTE = ("  -gtk-icon-palette: success %(farbe)s, warning %(farbe)s,"
+                " error %(farbe)s;\n")
+RULE = "phosh-battery-info image {\n%s}\n"
+
+
+def css_rule(power=None, level=None, colors=None):
+    """The stylesheet for one combination, or "" when there is nothing to
+    say."""
+    farben = colors or COLORS
+    inhalt = ""
+    if power:
+        inhalt += RULE_COLOR % farben[power]
+    if level:
+        inhalt += RULE_PALETTE % {"farbe": farben[level]}
+    return RULE % inhalt if inhalt else ""
+
 
 # Four characters of the rule, carried in the theme name.
 #
@@ -87,15 +107,14 @@ RULE = ("phosh-battery-info image {\n"
 # disk is right, the icon is wrong, and nothing says why until the next
 # reboot. A name that changes with the rule is what makes an upgrade visible
 # the same minute.
-TOKEN = hashlib.sha1(RULE.encode()).hexdigest()[:4]
+TOKEN = hashlib.sha1((RULE + RULE_COLOR + RULE_PALETTE).encode()).hexdigest()[:4]
 
-# The marker that makes one of our themes recognisable as ours - including
-# the ones an older version wrote, which is why the token is matched loosely.
-# It has to survive a crash: the daemon may be killed with a colour theme
-# active, and the next start has to tell "adw-gtk3-batt1f3a-green" from a
-# theme somebody actually chose.
-MARK = re.compile(r"^(?P<base>.+)-batt[0-9a-f]{0,8}-(?P<bucket>%s)$"
-                  % "|".join(BUCKETS))
+# Matches a name of ours - the current shape "<base>-batt<token>-<power>-
+# <level>" and the ones older versions wrote, which is what lets an upgrade
+# recognise its own leftovers instead of taking them for somebody's theme.
+MARK = re.compile(r"^(?P<base>.+)-batt[0-9a-f]{0,8}"
+                  r"-(?P<power>none|%s)(?:-(?P<level>none|%s))?$"
+                  % ("|".join(BUCKETS), "|".join(BUCKETS)))
 
 DEFAULTS = {
     # Colour while charging. On by default - it is what this is for.
@@ -120,6 +139,15 @@ DEFAULTS = {
     # because that is the only time anybody sees this icon.
     "drain_amber_w": 3.0,
     "drain_red_w": 5.0,
+    # The filling says something else entirely: how full the battery is.
+    # Above level_amber_pct it stays in the panel's own colour, below
+    # level_red_pct it is red.
+    "level": True,
+    "level_amber_pct": 60.0,
+    "level_red_pct": 15.0,
+    # Two points of hysteresis, so a percentage sitting on 60 and stepping
+    # to 61 and back does not restyle every app twice a minute.
+    "level_hysteresis_pct": 2.0,
     # How far past a threshold the power has to go before the colour follows.
     # A tenth: the instantaneous current swings by a quarter of an amp from
     # one reading to the next, and without this the icon would flicker
@@ -207,9 +235,16 @@ def read_battery(base=None):
         volt = int(spannung) / 1e6
     except ValueError:
         return None
+    try:
+        # Missing or unreadable is None, not 0: a phone whose capacity
+        # cannot be read must not have its icon painted "nearly empty".
+        prozent = float(_read("capacity", base))
+    except (TypeError, ValueError):
+        prozent = None
     watt = ampere * volt
     return {
         "status": status,
+        "percent": prozent,
         "ampere": ampere,
         "volt": volt,
         "watt": watt,
@@ -265,6 +300,34 @@ def bucket_for(watt, charging, cfg, current=None):
     return "amber" if watt >= gelb else None
 
 
+def level_for(percent, cfg, current=None):
+    """The colour of the filling: how full, not how fast.
+
+    None means "leave it in the panel's own colour" - which is what a
+    healthy battery should look like, the same as every other icon up there.
+    """
+    if percent is None or not cfg["level"]:
+        return None
+    h = cfg["level_hysteresis_pct"]
+    gelb, rot = cfg["level_amber_pct"], cfg["level_red_pct"]
+    # Leaving a colour costs the two points that entering it did not, so a
+    # percentage stepping across 60 and back does not restyle twice.
+    if current == "red":
+        rot += h
+    elif current == "amber":
+        gelb += h
+        rot -= h
+    if percent < rot:
+        return "red"
+    return "amber" if percent < gelb else None
+
+
+def wanted_level(mess, cfg, current=None):
+    if mess is None:
+        return None
+    return level_for(mess.get("percent"), cfg, current)
+
+
 def wanted_bucket(mess, cfg, current=None):
     """The colour the icon should have, or None for "leave it alone"."""
     if mess is None or not mess["plausible"] or not mess["moving"]:
@@ -284,14 +347,18 @@ def base_name(name):
     return treffer.group("base") if treffer else name
 
 
-def bucket_of(name):
-    """Which colour a theme name stands for, or None if it is not ours."""
+def colours_of(name):
+    """The pair (power, level) a theme name stands for, ("", "") if it is
+    not one of ours. Either half may be None, meaning "not coloured"."""
     treffer = MARK.match(name or "")
-    return treffer.group("bucket") if treffer else None
+    if not treffer:
+        return ("", "")
+    weiche = lambda wert: None if wert in (None, "none") else wert  # noqa: E731
+    return (weiche(treffer.group("power")), weiche(treffer.group("level")))
 
 
-def theme_name(base, bucket):
-    return "%s-batt%s-%s" % (base, TOKEN, bucket)
+def theme_name(base, power=None, level=None):
+    return "%s-batt%s-%s-%s" % (base, TOKEN, power or "none", level or "none")
 
 
 def base_css(base):
@@ -335,46 +402,74 @@ def _import(ziel):
     return '@import url("file://%s");\n' % ziel
 
 
-def write_themes(base, themes_dir=None, colors=None):
-    """Write the three colour themes. Returns the names, or [] if it cannot.
+def write_theme(base, power=None, level=None, themes_dir=None, colors=None):
+    """Write the theme for one combination. Returns its name, or None.
 
-    Generated every start rather than once: the user's theme may have been
-    updated by a package, and a stale copy of its name with a fresh
+    Written when it is needed rather than all twelve up front: most phones
+    only ever see a handful of the combinations, and twelve directories in
+    ~/.themes is twelve entries in every theme chooser on the phone.
+
+    Rewritten every time even when it exists, because the user's theme may
+    have been updated by a package - a stale copy of its name with a fresh
     stylesheet underneath is the kind of difference nobody would look for.
     """
+    regel = css_rule(power, level, colors)
+    if not regel:
+        return None                       # nothing to say - that is the base
     hell, dunkel = base_css(base)
     if hell is None:
-        return []
+        return None
     wurzel = themes_dir or THEMES
-    farben = colors or COLORS
-    namen = []
-    for bucket in BUCKETS:
-        name = theme_name(base, bucket)
-        gtk3 = os.path.join(wurzel, name, "gtk-3.0")
-        os.makedirs(gtk3, exist_ok=True)
-        regel = ("/* Written by battctl (furios_battery). Deleted by "
-                 "`battctl restore`. */\n"
-                 + RULE % {"farbe": farben[bucket]})
-        with open(os.path.join(gtk3, "gtk.css"), "w") as fh:
-            fh.write(_import(hell) + regel)
-        dunkelziel = os.path.join(gtk3, "gtk-dark.css")
-        if dunkel:
-            with open(dunkelziel, "w") as fh:
-                fh.write(_import(dunkel) + regel)
-        elif os.path.exists(dunkelziel):
-            # The base theme lost its dark sheet between two runs.
-            os.unlink(dunkelziel)
-        namen.append(name)
-    remove_themes(wurzel, ausser=namen)
-    return namen
+    name = theme_name(base, power, level)
+    gtk3 = os.path.join(wurzel, name, "gtk-3.0")
+    os.makedirs(gtk3, exist_ok=True)
+    kopf = ("/* Written by battctl (furios_battery). Deleted by "
+            "`battctl restore`. */\n")
+    with open(os.path.join(gtk3, "gtk.css"), "w") as fh:
+        fh.write(_import(hell) + kopf + regel)
+    dunkelziel = os.path.join(gtk3, "gtk-dark.css")
+    if dunkel:
+        with open(dunkelziel, "w") as fh:
+            fh.write(_import(dunkel) + kopf + regel)
+    elif os.path.exists(dunkelziel):
+        # The base theme lost its dark sheet between two runs.
+        os.unlink(dunkelziel)
+    return name
 
 
-def remove_themes(themes_dir=None, ausser=()):
-    """Take every theme of ours off the disk. Returns how many went.
+def can_theme(base):
+    """Can anything be built on this theme at all?
 
-    `ausser` is what write_themes has just written: the same call clears out
-    what an older version of the rule left behind, so a phone does not
-    collect a directory per upgrade.
+    Asked before the daemon starts: a base with no GTK3 stylesheet is the
+    one failure that leaves every other reading looking healthy while the
+    icon never changes colour.
+    """
+    return base_css(base)[0] is not None
+
+
+def stale_themes(themes_dir=None):
+    """Our themes from an older rule. Returns the names."""
+    wurzel = themes_dir or THEMES
+    try:
+        eintraege = sorted(os.listdir(wurzel))
+    except OSError:
+        return []
+    alt = []
+    for name in eintraege:
+        if base_name(name) == name:
+            continue                      # not one of ours
+        if ("-batt%s-" % TOKEN) in name:
+            continue                      # this generation
+        alt.append(name)
+    return alt
+
+
+def remove_themes(themes_dir=None, nur=None):
+    """Take our themes off the disk. Returns how many went.
+
+    `nur` is a list of names - used to clear out what an older version of
+    the rule left behind without touching this generation, so a phone does
+    not collect directories per upgrade.
     """
     wurzel = themes_dir or THEMES
     weg = 0
@@ -383,7 +478,7 @@ def remove_themes(themes_dir=None, ausser=()):
     except OSError:
         return 0
     for name in eintraege:
-        if name in ausser:
+        if nur is not None and name not in nur:
             continue
         if base_name(name) == name:
             continue                      # not one of ours
@@ -454,18 +549,23 @@ def describe(cfg=None, setting=None, base=None):
     mess = read_battery()
     jetzt = setting.get()
     basis = base or base_name(jetzt)
-    zeigt = bucket_of(jetzt)
+    zeigt, zeigt_stand = colours_of(jetzt)
     bucket = wanted_bucket(mess, cfg, zeigt)
+    stand = wanted_level(mess, cfg, zeigt_stand)
     hell, _ = base_css(basis)
     return {
         "state": (mess or {}).get("status", "unknown"),
         "watt": round((mess or {}).get("watt", 0.0), 2),
         "ampere": round((mess or {}).get("ampere", 0.0), 3),
         "volt": round((mess or {}).get("volt", 0.0), 3),
+        "percent": (mess or {}).get("percent"),
         "readable": mess is not None,
         "plausible": (mess or {}).get("plausible", False),
         "bucket": bucket or "none",
         "showing": zeigt or "none",
+        # The filling, which says something else: how full, not how fast.
+        "level_bucket": stand or "none",
+        "level_showing": zeigt_stand or "none",
         "theme": jetzt,
         "base_theme": basis,
         # A theme we cannot build on is the one failure that leaves everything
@@ -487,8 +587,11 @@ def cmd_status(argv):
               % (zustand["watt"], zustand["ampere"], zustand["volt"]))
     else:
         print("power:        not readable (%s)" % SYSFS)
-    print("colour:       %s" % zustand["showing"])
-    print("would be:     %s" % zustand["bucket"])
+    print("shell:        %s (would be %s)"
+          % (zustand["showing"], zustand["bucket"]))
+    print("filling:      %s (would be %s) at %s %%"
+          % (zustand["level_showing"], zustand["level_bucket"],
+             "?" if zustand["percent"] is None else int(zustand["percent"])))
     print("base theme:   %s" % zustand["base_theme"])
     print("theme now:    %s" % zustand["theme"])
     if not zustand["can_theme"]:
@@ -501,12 +604,16 @@ def cmd_status(argv):
           "from %.1f W)"
           % ("on" if cfg["discharging"] else "off",
              cfg["drain_amber_w"], cfg["drain_red_w"]))
+    print("filling:      %s (plain above %d %%, amber below, red below %d %%)"
+          % ("on" if cfg["level"] else "off",
+             int(cfg["level_amber_pct"]), int(cfg["level_red_pct"])))
     return 0 if zustand["readable"] else 1
 
 
 # Which config keys `battctl config` will take, and how to read the value.
-SCHALTER = ("charging", "discharging")
+SCHALTER = ("charging", "discharging", "level")
 ZAHLEN = ("charge_green_w", "charge_amber_w", "drain_amber_w", "drain_red_w",
+          "level_amber_pct", "level_red_pct", "level_hysteresis_pct",
           "dwell_s", "window_s", "hysteresis")
 
 
@@ -547,6 +654,9 @@ def cmd_config(argv):
         return 2
     if cfg["drain_amber_w"] >= cfg["drain_red_w"]:
         print("drain_amber_w must be below drain_red_w.", file=sys.stderr)
+        return 2
+    if cfg["level_red_pct"] >= cfg["level_amber_pct"]:
+        print("level_red_pct must be below level_amber_pct.", file=sys.stderr)
         return 2
     save_config(cfg)
     print("%s: %s" % (key, cfg[key]))
@@ -590,12 +700,12 @@ class Daemon:
         self.cfg = cfg or load_config()
         self.setting = setting or Setting()
         self.samples = []                 # (Zeitpunkt, Watt, laedt)
-        self.showing = None               # der Name der Farbe, nicht des Themes
+        # (Huelle, Fuellung) - die Namen der Farben, nicht des Themes
+        self.showing = (None, None)
         self.last_change = 0.0
         self.last_good = 0.0              # wann zuletzt etwas Brauchbares kam
         self.cfg_stamp = self._stamp()
         self.base = base_name(jetzt if jetzt is not None else self.setting.get())
-        self.themes = []
 
     @staticmethod
     def _stamp(pfad=None):
@@ -620,9 +730,9 @@ class Daemon:
         self.cfg = load_config()
         return True
 
-    def ensure_themes(self):
-        self.themes = write_themes(self.base)
-        return bool(self.themes)
+    def ensure_theme(self, power, level):
+        """The theme for one pair, written if it is not there yet."""
+        return write_theme(self.base, power, level)
 
     def adopt(self, name):
         """Somebody changed the theme while we were running.
@@ -634,8 +744,7 @@ class Daemon:
         if base_name(name) == self.base:
             return False
         self.base = base_name(name)
-        self.showing = None
-        self.ensure_themes()
+        self.showing = (None, None)
         return True
 
     def sample(self, now=None, mess=None):
@@ -659,22 +768,31 @@ class Daemon:
         mitte = median(gleich) if gleich else mess["watt"]
         glatt = dict(mess)
         glatt["watt"] = mitte
-        return wanted_bucket(glatt, self.cfg, self.showing)
+        return wanted_bucket(glatt, self.cfg, self.showing[0])
 
-    def apply(self, bucket, now=None):
-        """Set the theme, if the colour really is a different one and it has
-        been showing long enough. Returns True when the setting was written."""
+    def apply(self, paar, now=None):
+        """Set the theme for (shell colour, filling colour).
+
+        Returns True when the setting was written. One pair, one theme: the
+        two halves of the icon live in the same stylesheet, so a change to
+        either is one switch, not two.
+        """
         now = time.time() if now is None else now
-        if bucket == self.showing:
+        paar = tuple(paar)
+        if paar == self.showing:
             return False
-        if self.showing is not None and now - self.last_change < self.cfg["dwell_s"]:
+        if (self.showing != (None, None)
+                and now - self.last_change < self.cfg["dwell_s"]):
             return False
-        if bucket is not None and not self.themes and not self.ensure_themes():
-            return False
-        ziel = self.base if bucket is None else theme_name(self.base, bucket)
+        if paar == (None, None):
+            ziel = self.base
+        else:
+            ziel = self.ensure_theme(*paar)
+            if ziel is None:
+                return False
         if not self.setting.set(ziel):
             return False
-        self.showing = bucket
+        self.showing = paar
         self.last_change = now
         return True
 
@@ -688,8 +806,8 @@ class Daemon:
             # Someone (a crash of ours, a second instance) left a colour on
             # that we are not tracking. Adopt it so hysteresis and dwell start
             # from what is on screen.
-            zeigt = bucket_of(jetzt)
-            if zeigt is not None and self.showing is None:
+            zeigt = colours_of(jetzt)
+            if zeigt != ("", "") and self.showing == (None, None):
                 self.showing = zeigt
         gemessen = self.sample(now, mess)
         if gemessen is None:
@@ -698,12 +816,14 @@ class Daemon:
             # for ever: a colour nothing can justify any more is worse than
             # no colour, so once a whole window has gone by without a
             # measurement it goes.
-            if (self.showing is not None
+            if (self.showing != (None, None)
                     and now - self.last_good > self.cfg["window_s"]):
-                return self.apply(None, now)
+                return self.apply((None, None), now)
             return False
         self.last_good = now
-        return self.apply(self.decide(gemessen, now), now)
+        return self.apply((self.decide(gemessen, now),
+                           wanted_level(gemessen, self.cfg, self.showing[1])),
+                          now)
 
 
 def cmd_daemon(_argv):
@@ -739,7 +859,12 @@ def cmd_daemon(_argv):
             return gesetzt
 
     daemon = Daemon(setting=GioSetting())
-    if not daemon.ensure_themes():
+    # Leftovers from an older rule, before anything new is written: the
+    # names differ, so nothing in use is touched.
+    veraltet = stale_themes()
+    if veraltet:
+        remove_themes(nur=veraltet)
+    if not can_theme(daemon.base):
         print("No GTK3 stylesheet found for theme %r - nothing to colour."
               % daemon.base, file=sys.stderr)
         return 1
@@ -750,8 +875,10 @@ def cmd_daemon(_argv):
     def aufwachen(*_):
         try:
             if daemon.tick():
-                print("%s -> %s" % (daemon.showing or "off",
-                                    daemon.setting.get()), flush=True)
+                print("shell %s, filling %s -> %s"
+                      % (daemon.showing[0] or "plain",
+                         daemon.showing[1] or "plain",
+                         daemon.setting.get()), flush=True)
         except Exception as fehler:                  # noqa: BLE001
             # A cosmetic daemon must not die of a surprise in one reading.
             print("tick failed: %r" % (fehler,), file=sys.stderr, flush=True)
@@ -760,7 +887,7 @@ def cmd_daemon(_argv):
     def beenden(*_):
         # The theme goes back before we do. A green icon left behind on a
         # phone whose daemon is gone would be a lie that outlives it.
-        daemon.apply(None, now=time.time() + daemon.cfg["dwell_s"])
+        daemon.apply((None, None), now=time.time() + daemon.cfg["dwell_s"])
         schleife.quit()
         return True
 
