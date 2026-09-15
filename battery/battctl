@@ -1191,10 +1191,17 @@ def read_log(pfad):
             watt = float(teile[2])
         except ValueError:
             continue
-        try:
-            licht = int(teile[4])
-        except ValueError:
-            licht = None
+        # Two shapes, because the column has had two: the panel's DPMS
+        # state ("On"/"Off") and, on a device without that node, the
+        # backlight number. Anything else is "do not know".
+        roh_licht = teile[4].strip()
+        if roh_licht in ("On", "Off"):
+            licht = roh_licht == "On"
+        else:
+            try:
+                licht = int(roh_licht) > 0
+            except ValueError:
+                licht = None
         zeilen.append({"zeit": teile[0], "state": teile[1], "watt": watt,
                        "percent": teile[3], "screen": licht})
     if not zeilen:
@@ -1215,8 +1222,8 @@ def summarise(zeilen):
         schluessel = zeile["state"]
         gruppen.setdefault(schluessel, []).append(zeile["watt"])
         if zeile["state"] == "Discharging" and zeile["screen"] is not None:
-            wohin = "Discharging, screen on" if zeile["screen"] > 0 \
-                else "Discharging, screen off"
+            wohin = ("Discharging, screen on" if zeile["screen"]
+                     else "Discharging, screen off")
             gruppen.setdefault(wohin, []).append(zeile["watt"])
     wechsel, vorher = 0, None
     for zeile in zeilen:
@@ -1298,15 +1305,24 @@ def cmd_summarise(argv):
 
 
 def _screen_on():
-    """Whether the display is lit, as well as it can be told here.
+    """Whether the display is lit.
 
-    logind's IdleHint said "no" with the screen off, and the backlight LED
-    kept its last brightness, so neither is the answer on its own. What is
-    reliable is that a compositor with a dark panel still answers a frame
-    grab - but running grim once a sample is absurd. So this reports the
-    backlight value and lets whoever reads the log decide; "?" where there
-    is none.
+    The panel's DPMS state, which is a state and not a leftover value.
+    Measured on 15.9.2026: the backlight LED keeps its last brightness
+    after the screen goes dark (629 of 2047 with `grim` refusing to copy
+    the output), and logind's IdleHint said "no" at the same moment. So
+    those two can say "off" but cannot say "on", and this file can.
+
+    Falls back to the backlight number where there is no DRM node, and to
+    "?" where there is neither - a log column, not a verdict.
     """
+    for pfad in ("/sys/class/drm/card0-DSI-1/dpms",
+                 "/sys/class/drm/card0-eDP-1/dpms"):
+        try:
+            with open(pfad) as fh:
+                return fh.read().strip()          # "On" / "Off"
+        except OSError:
+            continue
     for pfad in ("/sys/class/backlight/panel0-backlight/brightness",
                  "/sys/class/leds/lcd-backlight/brightness"):
         try:

@@ -916,6 +916,16 @@ class Mitschnitt(Basis):
         _zeilen, fehler = b.read_log(pfad)
         self.assertIn("no readings", fehler)
 
+    def test_die_bildschirmspalte_in_beiden_schreibweisen(self):
+        """Der DPMS-Zustand des Panels, und - wo es den nicht gibt - die
+        Helligkeit als Zahl."""
+        zeilen, _ = b.read_log(self.log(
+            [("Discharging", 1.0, "On"), ("Discharging", 1.0, "Off"),
+             ("Discharging", 1.0, 700), ("Discharging", 1.0, 0),
+             ("Discharging", 1.0, "?")]))
+        self.assertEqual([z["screen"] for z in zeilen],
+                         [True, False, True, False, None])
+
     def test_bildschirm_an_und_aus_sind_zwei_verteilungen(self):
         """Nur die eine bestimmt die Schwellen: dieses Symbol sieht nur,
         wer auf den Bildschirm schaut."""
