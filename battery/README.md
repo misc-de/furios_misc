@@ -17,6 +17,12 @@ Also: **gruen**, wenn viel hineingeht, **orange** dazwischen, **rot**, wenn
 sich kaum etwas bewegt — und die Fuellung darin faerbt sich unabhaengig
 davon, wenn der Ladestand knapp wird.
 
+![Die Zustaende](doc/zustaende.png)
+
+(Mit GTKs eigenem Renderer aus den echten Symbolen gezeichnet, nicht
+nachgemalt: `python3 doc/make-zustaende.py`. Die Schwellen in der Tafel sind
+die Vorgaben — gemessene koennen andere sein.)
+
 Die Farbe der Huelle im Akkubetrieb ist ausgeschaltet, bis man sie
 einschaltet; die Fuellung faerbt sich immer, weil ein fast leerer Akku das
 sagen soll, ob er nun laedt, entlaedt oder voll ist.
