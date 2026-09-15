@@ -167,9 +167,34 @@ DEFAULTS = {
 ICON_DIRS = [os.path.expanduser("~/.icons"),
              os.path.expanduser("~/.local/share/icons"),
              "/usr/local/share/icons", "/usr/share/icons"]
-# Where our own copies go, and where the originals come from.
-ICON_HOME = os.path.expanduser("~/.local/share/icons/Adwaita/symbolic/status")
+# Our own icon theme, and where the originals come from.
+#
+# A theme of our own rather than files dropped into ~/.local/share/icons/
+# Adwaita, which shadows the system theme for this user. That was the first
+# attempt and it has a trap: GTK caches an icon lookup, and once a file it
+# had found disappears the shell draws the broken-image placeholder and
+# never recovers - measured on 15.9.2026, and there is no way to make phosh
+# re-read without restarting it. Switching the icon-theme setting always
+# rebuilds, so the theme is both how the icons arrive and how they leave.
+ICON_THEME = "furios-battery"
+ICON_SETTING = "org.gnome.desktop.interface icon-theme"
+ICON_BASE = os.path.join(
+    os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share")),
+    "icons")
 ICON_SOURCE = "/usr/share/icons/Adwaita/symbolic/status"
+INDEX_THEME = """[Icon Theme]
+Name=%(name)s
+Comment=%(inherits)s, plus battery icons whose filling can be coloured alone
+Inherits=%(inherits)s,hicolor
+Directories=symbolic/status
+
+[symbolic/status]
+Size=16
+MinSize=8
+MaxSize=512
+Type=Scalable
+Context=Status
+"""
 ICON_MARK = "<!-- battctl (furios_misc): filling split off so it can be "
 ICON_MARK_FULL = (ICON_MARK + "coloured on its own. Remove with "
                   "`battctl restore`. -->")
@@ -186,7 +211,7 @@ def find_icon(name):
     for wurzel in ICON_DIRS:
         for teil in ("symbolic/status", "scalable/status", "symbolic/legacy",
                      "scalable/legacy"):
-            for theme in ("Adwaita", "hicolor", ""):
+            for theme in (ICON_THEME, "Adwaita", "hicolor", ""):
                 pfad = os.path.join(wurzel, theme, teil, name + ".svg")
                 if os.path.isfile(pfad):
                     return pfad
@@ -235,10 +260,31 @@ def split_icon_svg(quelle, level):
     return text.replace("</svg>", ICON_MARK_FULL + "\n" + rechteck + "\n</svg>")
 
 
-def write_split_icons(ziel=None, quelle=None):
-    """Our copies of the discharge icons. Returns the names written."""
-    ziel = ziel or ICON_HOME
+def icon_theme_dir(wurzel=None):
+    return os.path.join(wurzel or ICON_BASE, ICON_THEME)
+
+
+def icon_base_theme(wurzel=None):
+    """The theme ours inherits from - the user's own, read back out of the
+    index we wrote. That is where it is remembered, so a crash cannot lose
+    it and a person can read it."""
+    pfad = os.path.join(icon_theme_dir(wurzel), "index.theme")
+    try:
+        with open(pfad) as fh:
+            for zeile in fh:
+                if zeile.startswith("Inherits="):
+                    return zeile.split("=", 1)[1].strip().split(",")[0]
+    except OSError:
+        pass
+    return None
+
+
+def write_icon_theme(base="Adwaita", wurzel=None, quelle=None):
+    """Write our icon theme: an index that inherits the user's own, and the
+    discharge icons with a filling of their own. Returns the icon names."""
     quelle = quelle or ICON_SOURCE
+    ordner = icon_theme_dir(wurzel)
+    ziel = os.path.join(ordner, "symbolic", "status")
     geschrieben = []
     for level in range(0, 101, 10):
         name = "battery-level-%d-symbolic.svg" % level
@@ -251,22 +297,27 @@ def write_split_icons(ziel=None, quelle=None):
             with open(pfad) as fh:
                 if fh.read() == neu:
                     geschrieben.append(name)
-                    continue              # schon da und unveraendert
+                    continue
         except OSError:
             pass
         with open(pfad, "w") as fh:
             fh.write(neu)
         geschrieben.append(name)
+    if not geschrieben:
+        return []
+    with open(os.path.join(ordner, "index.theme"), "w") as fh:
+        fh.write(INDEX_THEME % {"name": ICON_THEME, "inherits": base})
     return geschrieben
 
 
-def remove_split_icons(ziel=None):
-    """Take our icon copies away again. Returns how many went.
+def remove_icon_theme(wurzel=None):
+    """Take our icon theme off the disk. Returns how many files went.
 
-    Only ours: a file without the marker was put there by somebody else
-    and stays, even if the name matches.
+    Only ours, and only if it is ours: a directory of that name without our
+    marker in it was put there by somebody else and stays.
     """
-    ziel = ziel or ICON_HOME
+    ordner = icon_theme_dir(wurzel)
+    ziel = os.path.join(ordner, "symbolic", "status")
     weg = 0
     try:
         eintraege = sorted(os.listdir(ziel))
@@ -282,6 +333,19 @@ def remove_split_icons(ziel=None):
             continue
         os.unlink(pfad)
         weg += 1
+    if weg:
+        for rest in (ziel, os.path.dirname(ziel), ordner):
+            try:
+                os.rmdir(rest)
+            except OSError:
+                # index.theme is still in there, and it goes with the rest.
+                index = os.path.join(rest, "index.theme")
+                if os.path.exists(index):
+                    os.unlink(index)
+                    try:
+                        os.rmdir(rest)
+                    except OSError:
+                        pass
     return weg
 
 
@@ -710,9 +774,11 @@ class Setting:
     changes are rare by design.
     """
 
-    def __init__(self, datei=None):
+    def __init__(self, datei=None, schluessel=SETTING, umgebung=None):
         # Tests point this at a file instead of dconf. Nothing else does.
-        self.datei = datei or os.environ.get("FURIOS_BATTERY_SETTING_FILE")
+        self.schluessel = schluessel
+        self.datei = datei or os.environ.get(
+            umgebung or "FURIOS_BATTERY_SETTING_FILE")
 
     def get(self):
         if self.datei:
@@ -722,7 +788,7 @@ class Setting:
             except OSError:
                 return ""
         try:
-            aus = subprocess.run(["gsettings", "get"] + SETTING.split(),
+            aus = subprocess.run(["gsettings", "get"] + self.schluessel.split(),
                                  capture_output=True, text=True, timeout=10)
         except (OSError, subprocess.SubprocessError):
             return ""
@@ -734,11 +800,48 @@ class Setting:
                 fh.write(name + "\n")
             return True
         try:
-            aus = subprocess.run(["gsettings", "set"] + SETTING.split() + [name],
+            aus = subprocess.run(["gsettings", "set"]
+                                 + self.schluessel.split() + [name],
                                  capture_output=True, text=True, timeout=10)
         except (OSError, subprocess.SubprocessError):
             return False
         return aus.returncode == 0
+
+
+def icon_setting():
+    """The icon-theme key. Its own file in the tests, like the other one."""
+    return Setting(schluessel=ICON_SETTING,
+                   umgebung="FURIOS_BATTERY_ICON_SETTING_FILE")
+
+
+def use_icon_theme(setting=None, wurzel=None, quelle=None):
+    """Write our icon theme and switch to it. Returns True if it is in use.
+
+    The switch is what makes GTK re-read: it caches lookups and does not
+    notice a file appearing under a theme it is already using.
+    """
+    setting = setting or icon_setting()
+    jetzt = setting.get()
+    basis = icon_base_theme(wurzel) if jetzt == ICON_THEME else jetzt
+    if not write_icon_theme(basis or "Adwaita", wurzel, quelle):
+        return False
+    if jetzt != ICON_THEME:
+        return setting.set(ICON_THEME)
+    return True
+
+
+def drop_icon_theme(setting=None, wurzel=None):
+    """Back to the user's own icon theme, then take ours away.
+
+    In that order, and not the other way round: a theme whose files vanish
+    under a shell that has them cached leaves a broken-image placeholder in
+    the bar with no way back short of restarting phosh.
+    """
+    setting = setting or icon_setting()
+    basis = icon_base_theme(wurzel) or "Adwaita"
+    if setting.get() == ICON_THEME:
+        setting.set(basis)
+    return remove_icon_theme(wurzel)
 
 
 # -------------------------------------------------------------------- Zustand
@@ -907,7 +1010,7 @@ def cmd_restore(_argv):
     """
     cmd_reset([])
     weg = remove_themes()
-    symbole = remove_split_icons()
+    symbole = drop_icon_theme()
     try:
         os.unlink(CONFIG)
     except OSError:
@@ -1114,10 +1217,12 @@ def cmd_daemon(_argv):
     # battery too. Identical to Adwaita's until something sets the palette,
     # and only in this user's icon directory.
     if daemon.cfg["level"]:
-        eigene = write_split_icons()
-        if eigene:
-            print("%d discharge icons with a filling of their own"
-                  % len(eigene), flush=True)
+        if use_icon_theme():
+            print("icon theme %s in use - the discharge icons have a "
+                  "filling of their own" % ICON_THEME, flush=True)
+        else:
+            print("could not build the icon theme - the filling cannot be "
+                  "coloured on battery", file=sys.stderr, flush=True)
     if not can_theme(daemon.base):
         print("No GTK3 stylesheet found for theme %r - nothing to colour."
               % daemon.base, file=sys.stderr)

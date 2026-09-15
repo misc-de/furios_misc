@@ -172,12 +172,31 @@ hiesse, den Pfad zu parsen. Stattdessen kommt ein identisches Rechteck mit
 Originale bei 100, 90, 50 und 30 % geprueft — das Rechteck deckt die
 urspruengliche Flaeche exakt, kein Rand blitzt durch.
 
-Die acht Kopien liegen in `~/.local/share/icons/Adwaita/symbolic/status`
-und beschatten die Systemdateien NUR fuer diesen Nutzer; `/usr/share`
-bleibt unberuehrt. phosh hat sie ohne Neustart uebernommen. Ohne gesetzte
-Palette sehen sie aus wie die Originale, es aendert sich also nichts fuer
-andere Programme. Die Zusammenfuehrung oben bleibt als Rueckfallweg fuer
-Symbole, zu denen es keine Kopie gibt.
+Die acht Fassungen liegen in einem eigenen Symbolthema
+`~/.local/share/icons/furios-battery`, das das Thema des Nutzers erbt;
+`/usr/share` bleibt unberuehrt. Ohne gesetzte Palette sehen sie aus wie die
+Originale, es aendert sich also nichts fuer andere Programme. Die
+Zusammenfuehrung oben bleibt als Rueckfallweg fuer Symbole, zu denen es
+keine Fassung gibt.
+
+**Der erste Versuch war ein eigenes Thema NICHT** — die Dateien lagen unter
+`~/.local/share/icons/Adwaita` und beschatteten die Systemdateien. Das
+funktionierte auf Anhieb und hat eine Falle, die am Geraet aufging: GTK
+merkt sich, WO es ein Symbol gefunden hat. Verschwindet diese Datei, malt
+die Leiste das Platzhaltersymbol — und sie erholt sich nicht, auch nicht,
+wenn man die Datei sofort zurueckschreibt (gemessen: Datei wieder da,
+Symbol weiter kaputt). Nur ein Wechsel der Themen-Einstellung laesst GTK
+neu suchen. Deshalb jetzt ein Thema: `gsettings set … icon-theme` ist der
+Hinweg, derselbe Schalter zurueck ist der Rueckweg, und `battctl restore`
+setzt IMMER erst die Einstellung und loescht erst danach die Dateien.
+
+Ausgeloest hat das ein Fehler in unseren eigenen Tests: `cmd_restore` rief
+`remove_split_icons()` ohne Argument, die Testumgebung bog aber nur SYSFS,
+CONFIG und THEMES um - nicht das Symbolverzeichnis. Ein Testlauf hat damit
+die Symbole des laufenden Telefons geloescht. Die Testbasis biegt jetzt
+JEDEN Pfad um, der ins echte Zuhause zeigt (`ICON_BASE`, `ICON_SOURCE`,
+`ICON_DIRS` und die zweite gsettings-Datei), und der Kommentar dort sagt,
+warum das kein Luxus ist.
 
 **Und der Name, den phosh zeichnet, ist nicht der von UPower**: phosh baut
 `battery-level-%d-symbolic` selbst (im Programm nachgelesen), UPower meldet

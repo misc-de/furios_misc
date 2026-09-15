@@ -32,14 +32,21 @@ Telefon zwischen Laden und Entladen springen. Der Huelle folgt das **nicht**:
 sie bleibt farblos, solange sich die Messungen einer Minute nicht ueber die
 Richtung einig sind. Sonst waere die Farbe eine Anzeige des Kabels.
 
-Damit das im Akkubetrieb ueberhaupt geht, legt `battctl` acht Symbolen eine
-eigene Fuellflaeche unter: Adwaita zeichnet die Entlade-Batterie als EINEN
-Pfad, in dem der Ladestand steckt, und kein CSS kommt dort allein hin. Die
-Kopien liegen in `~/.local/share/icons/Adwaita/symbolic/status`, sind bis
-auf die zusaetzliche Flaeche identisch mit den Originalen (die unberuehrt
-bleiben) und verschwinden mit `battctl restore`. Wo eine solche Kopie fehlt,
-faellt die Anzeige auf eine Farbe fuers ganze Symbol zurueck — die
-dringlichere der beiden.
+Damit das im Akkubetrieb ueberhaupt geht, bringt `battctl` ein eigenes
+**Symbolthema** mit: Adwaita zeichnet die Entlade-Batterie als EINEN Pfad,
+in dem der Ladestand steckt, und kein CSS kommt dort allein hin. Das Thema
+`furios-battery` erbt das eigene Thema des Nutzers und ersetzt nur acht
+Dateien durch Fassungen mit einer eigenen Fuellflaeche; es liegt unter
+`~/.local/share/icons` und geht mit `battctl restore` wieder weg.
+
+Ein Thema, und nicht ein paar Dateien in `~/.local/share/icons/Adwaita`:
+das waere der kuerzere Weg und hat eine Falle. GTK merkt sich, wo es ein
+Symbol gefunden hat; verschwindet die Datei wieder, zeichnet die Leiste
+das Platzhaltersymbol und erholt sich nicht mehr — auch nicht, wenn man
+die Datei zurueckschreibt. Nur ein Wechsel der Themen-Einstellung laesst
+GTK neu suchen, und der ist hier deshalb sowohl der Hinweg als auch der
+Rueckweg. Wo eine Fassung fehlt, faellt die Anzeige auf eine Farbe fuers
+ganze Symbol zurueck — die dringlichere der beiden.
 
 Und wenn Kernel und UPower sich ueber die Richtung widersprechen, bleibt der
 Rahmen farblos: phosh zeichnet dann ein Symbol, zu dem die Farbe nicht
@@ -192,5 +199,5 @@ tests/run-tests.sh      # ohne Display, ohne Akku, ohne root - NIE mit sudo
 tests/coverage.sh
 ```
 
-151 Tests, 89,3 % der Zeilen. Was fehlt, ist die D-Bus-Verdrahtung des Daemons
+156 Tests, 89,4 % der Zeilen. Was fehlt, ist die D-Bus-Verdrahtung des Daemons
 — die wird am Geraet belegt, nicht simuliert (FINDINGS.md).

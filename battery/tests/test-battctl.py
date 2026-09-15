@@ -49,8 +49,20 @@ class Basis(unittest.TestCase):
         self.setting = os.path.join(self.tmp, "gtk-theme")
         os.makedirs(self.sysfs)
         os.makedirs(self.themes)
-        self.alt = (b.SYSFS, b.CONFIG, b.THEMES, list(b.THEME_DIRS))
+        # Jeder Pfad, der sonst ins echte Zuhause zeigt. Vollstaendig, und
+        # das ist kein Luxus: die Fassung ohne ICON_BASE hat beim Testlauf
+        # die Symbole des laufenden Telefons geloescht und ein kaputtes
+        # Symbol in der Leiste hinterlassen (15.9.2026).
+        self.alt = (b.SYSFS, b.CONFIG, b.THEMES, list(b.THEME_DIRS),
+                    b.ICON_BASE, b.ICON_SOURCE, list(b.ICON_DIRS))
         self.alter_pfad = os.environ["PATH"]
+        self.ikonen = os.path.join(self.tmp, "icons")
+        b.ICON_BASE = self.ikonen
+        b.ICON_DIRS[:] = [self.ikonen]
+        self.icon_setting = os.path.join(self.tmp, "icon-theme")
+        with open(self.icon_setting, "w") as fh:
+            fh.write("Adwaita\n")
+        os.environ["FURIOS_BATTERY_ICON_SETTING_FILE"] = self.icon_setting
         b.SYSFS = self.sysfs
         b.CONFIG = os.path.join(self.tmp, "config.json")
         b.THEMES = self.themes
@@ -64,6 +76,9 @@ class Basis(unittest.TestCase):
     def tearDown(self):
         b.SYSFS, b.CONFIG, b.THEMES = self.alt[:3]
         b.THEME_DIRS[:] = self.alt[3]
+        b.ICON_BASE, b.ICON_SOURCE = self.alt[4], self.alt[5]
+        b.ICON_DIRS[:] = self.alt[6]
+        os.environ.pop("FURIOS_BATTERY_ICON_SETTING_FILE", None)
         os.environ.pop("FURIOS_BATTERY_SETTING_FILE", None)
         os.environ.pop("FURIOS_BATTERY_ICON", None)
         os.environ["PATH"] = self.alter_pfad
@@ -89,6 +104,14 @@ class Basis(unittest.TestCase):
     def alle_themes(self, base="base"):
         """Die drei Huellenfarben, wie sie frueher write_themes schrieb."""
         return [b.write_theme(base, farbe, None) for farbe in b.BUCKETS]
+
+    def symbol_mit_zwei_flaechen(self, name):
+        """Ein Symbol im Suchpfad, das eine eigene Fuellflaeche hat."""
+        ordner = os.path.join(self.ikonen, "Adwaita", "symbolic", "status")
+        os.makedirs(ordner, exist_ok=True)
+        with open(os.path.join(ordner, name + ".svg"), "w") as fh:
+            fh.write('<svg><path class="success" d="m 5 7"/>'
+                     '<path d="m 7 0"/></svg>')
 
     def make_theme(self, name, dark=True):
         gtk3 = os.path.join(self.themes, name, "gtk-3.0")
@@ -417,15 +440,15 @@ class Symbolfamilien(Basis):
         self.assertIsNone(b.upower_icon())
 
 
-class EigeneSymbole(Basis):
-    """Die Kopien der Entlade-Symbole, denen eine eigene Fuellflaeche
-    untergelegt ist."""
+class EigenesSymbolthema(Basis):
+    """Das eigene Symbolthema - Adwaita geerbt, plus Entlade-Symbole mit
+    einer Fuellflaeche, die sich allein faerben laesst."""
 
     def setUp(self):
         super().setUp()
         self.quelle = os.path.join(self.tmp, "adwaita")
-        self.ziel = os.path.join(self.tmp, "eigene")
         os.makedirs(self.quelle)
+        b.ICON_SOURCE = self.quelle
 
     def original(self, level, klasse=False):
         pfad = os.path.join(self.quelle, "battery-level-%d-symbolic.svg" % level)
@@ -435,11 +458,16 @@ class EigeneSymbole(Basis):
                      + '<path d="m 7 0 c -1 0"/>\n</svg>')
         return pfad
 
+    def dateien(self):
+        return sorted(os.listdir(os.path.join(
+            b.icon_theme_dir(), "symbolic", "status")))
+
     def test_die_fuellflaeche_kommt_dazu(self):
         self.original(90)
-        namen = b.write_split_icons(self.ziel, self.quelle)
+        namen = b.write_icon_theme("Adwaita")
         self.assertEqual(namen, ["battery-level-90-symbolic.svg"])
-        text = open(os.path.join(self.ziel, namen[0])).read()
+        text = open(os.path.join(b.icon_theme_dir(), "symbolic", "status",
+                                 namen[0])).read()
         self.assertIn('class="success"', text)
         # 90 % sind sieben von acht Einheiten, unten bei 13 angeschlagen
         self.assertIn('d="m 5 6 h 6 v 7 h -6 z"', text)
@@ -450,59 +478,92 @@ class EigeneSymbole(Basis):
                                 (50, "m 5 9 h 6 v 4 h -6 z"),
                                 (30, "m 5 11 h 6 v 2 h -6 z")):
             self.original(level)
-            b.write_split_icons(self.ziel, self.quelle)
-            text = open(os.path.join(
-                self.ziel, "battery-level-%d-symbolic.svg" % level)).read()
+            b.write_icon_theme("Adwaita")
+            text = open(os.path.join(b.icon_theme_dir(), "symbolic", "status",
+                                     "battery-level-%d-symbolic.svg" % level)).read()
             self.assertIn(erwartet, text, level)
+
+    def test_das_thema_erbt_das_eigene_des_nutzers(self):
+        self.original(90)
+        b.write_icon_theme("Papirus")
+        index = open(os.path.join(b.icon_theme_dir(), "index.theme")).read()
+        self.assertIn("Inherits=Papirus,hicolor", index)
+        self.assertEqual(b.icon_base_theme(), "Papirus")
+
+    def test_ohne_symbole_kein_index(self):
+        """Ein Thema ohne Dateien waere eines, das nur die Einstellung
+        veraendert und nichts kann."""
+        self.assertEqual(b.write_icon_theme("Adwaita"), [])
+        self.assertFalse(os.path.exists(os.path.join(b.icon_theme_dir(),
+                                                     "index.theme")))
+        self.assertIsNone(b.icon_base_theme())
 
     def test_was_schon_zwei_flaechen_hat_bleibt_unberuehrt(self):
         self.original(20, klasse=True)
-        self.assertEqual(b.write_split_icons(self.ziel, self.quelle), [])
+        self.assertEqual(b.write_icon_theme("Adwaita"), [])
 
     def test_ein_leerer_akku_hat_nichts_zu_faerben(self):
         self.original(0)
-        self.assertEqual(b.write_split_icons(self.ziel, self.quelle), [])
+        self.assertEqual(b.write_icon_theme("Adwaita"), [])
 
     def test_zweimal_schreiben_aendert_nichts(self):
         self.original(90)
-        b.write_split_icons(self.ziel, self.quelle)
-        pfad = os.path.join(self.ziel, "battery-level-90-symbolic.svg")
+        b.write_icon_theme("Adwaita")
+        pfad = os.path.join(b.icon_theme_dir(), "symbolic", "status",
+                            "battery-level-90-symbolic.svg")
         vorher = os.stat(pfad).st_mtime_ns
-        b.write_split_icons(self.ziel, self.quelle)
+        b.write_icon_theme("Adwaita")
         self.assertEqual(vorher, os.stat(pfad).st_mtime_ns)
 
     def test_fehlende_quelle_ist_kein_absturz(self):
-        self.assertEqual(b.write_split_icons(self.ziel, self.quelle), [])
+        b.ICON_SOURCE = os.path.join(self.tmp, "gibt-es-nicht")
+        self.assertEqual(b.write_icon_theme("Adwaita"), [])
         self.assertIsNone(b.split_icon_svg("/gibt/es/nicht", 50))
 
-    def test_entfernt_werden_nur_unsere(self):
+    def test_einschalten_setzt_die_einstellung(self):
         self.original(90)
-        b.write_split_icons(self.ziel, self.quelle)
-        fremd = os.path.join(self.ziel, "battery-level-50-symbolic.svg")
-        with open(fremd, "w") as fh:
-            fh.write("<svg>von jemand anderem</svg>")
-        self.assertEqual(b.remove_split_icons(self.ziel), 1)
-        self.assertTrue(os.path.exists(fremd))
+        self.assertTrue(b.use_icon_theme())
+        self.assertEqual(b.icon_setting().get(), b.ICON_THEME)
 
-    def test_entfernen_ohne_verzeichnis(self):
-        self.assertEqual(b.remove_split_icons(self.ziel), 0)
+    def test_und_merkt_sich_dabei_das_eigene_thema(self):
+        self.original(90)
+        with open(self.icon_setting, "w") as fh:
+            fh.write("Papirus\n")
+        b.use_icon_theme()
+        self.assertEqual(b.icon_base_theme(), "Papirus")
+        # Ein zweiter Lauf darf das nicht mit unserem eigenen Namen
+        # ueberschreiben - sonst waere der Weg zurueck weg.
+        b.use_icon_theme()
+        self.assertEqual(b.icon_base_theme(), "Papirus")
+
+    def test_ohne_brauchbare_symbole_wird_nicht_umgeschaltet(self):
+        self.assertFalse(b.use_icon_theme())
+        self.assertEqual(b.icon_setting().get(), "Adwaita")
+
+    def test_zurueck_erst_die_einstellung_dann_die_dateien(self):
+        """In dieser Reihenfolge: ein Thema, dessen Dateien unter einer
+        Shell verschwinden, die sie zwischengespeichert hat, hinterlaesst
+        ein kaputtes Symbol in der Leiste - am Geraet gesehen."""
+        self.original(90)
+        b.use_icon_theme()
+        self.assertEqual(b.drop_icon_theme(), 1)
+        self.assertEqual(b.icon_setting().get(), "Adwaita")
+        self.assertFalse(os.path.exists(b.icon_theme_dir()))
+
+    def test_fremdes_verzeichnis_gleichen_namens_bleibt(self):
+        ordner = os.path.join(b.icon_theme_dir(), "symbolic", "status")
+        os.makedirs(ordner)
+        with open(os.path.join(ordner, "battery-level-90-symbolic.svg"), "w") as fh:
+            fh.write("<svg>von jemand anderem</svg>")
+        self.assertEqual(b.drop_icon_theme(), 0)
+        self.assertTrue(os.path.exists(ordner))
 
     def test_danach_gilt_das_symbol_als_geteilt(self):
         """Der Zweck der ganzen Uebung: auf dem Entlade-Symbol sind es ab
         jetzt zwei Flaechen."""
         self.original(90)
-        b.write_split_icons(self.ziel, self.quelle)
-        # In der Form, in der GTK sie sucht: <dir>/Adwaita/symbolic/status
-        wurzel = os.path.join(self.tmp, "ikonen")
-        echt = os.path.join(wurzel, "Adwaita", "symbolic", "status")
-        os.makedirs(echt)
-        b.write_split_icons(echt, self.quelle)
-        alte = list(b.ICON_DIRS)
-        b.ICON_DIRS[:] = [wurzel]
-        try:
-            self.assertTrue(b.icon_is_split("battery-level-90-symbolic"))
-        finally:
-            b.ICON_DIRS[:] = alte
+        b.write_icon_theme("Adwaita")
+        self.assertTrue(b.icon_is_split("battery-level-90-symbolic"))
 
 
 class Namen(Basis):
@@ -1279,12 +1340,11 @@ class DerLauf(Basis):
         """On battery with an ordinary drain the shell says nothing - the
         filling still says the battery is nearly empty.
 
-        With the real battery-level-10-symbolic, which is one of the three
-        discharge icons Adwaita DOES draw in two paths (it colours the
-        remainder itself at that level). The other nine are a single shape;
-        that case is the test below.
+        With an icon that has two areas - either one of the three Adwaita
+        draws that way itself, or one of our own copies. The single-shape
+        case is the test below.
         """
-        self.d.icon = "battery-level-10-symbolic"
+        self.symbol_mit_zwei_flaechen("battery-level-10-symbolic")
         self.battery(status="Discharging", ampere=0.2, volt=3.9, percent=8)
         self.assertTrue(self.d.tick(now=1000))
         self.assertEqual(self.d.showing, (None, "red"))
@@ -1303,7 +1363,8 @@ class DerLauf(Basis):
     def test_und_die_dringlichere_gewinnt(self):
         """Half full and drawing hard: the level would say amber, the drain
         says red, and one shape can only say one of them."""
-        self.d.icon = "battery-level-50-symbolic"
+        # Kein Symbol mit zwei Flaechen im Suchpfad: das Entlade-Symbol
+        # ist dann eines aus einem Stueck.
         self.d.cfg["discharging"] = True
         self.battery(status="Discharging", ampere=1.6, volt=3.9, percent=50)
         self.d.tick(now=1000)              # 6.24 W
@@ -1355,7 +1416,8 @@ class DerLauf(Basis):
     def test_der_ladestand_wackelt_nicht_mit(self):
         """The level is the same number whichever way the current is
         flowing, so it keeps its colour while the direction is unsettled."""
-        self.d.icon = "battery-level-10-charging-symbolic"   # zwei Pfade
+        self.symbol_mit_zwei_flaechen("battery-level-10-charging-symbolic")
+        self.symbol_mit_zwei_flaechen("battery-level-10-symbolic")
         self.battery(status="Charging", ampere=1.2, volt=4.3, percent=9)
         self.d.tick(now=1000)
         self.battery(status="Discharging", ampere=1.2, volt=3.9, percent=9)
