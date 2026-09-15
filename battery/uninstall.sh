@@ -8,7 +8,7 @@
 set -uo pipefail
 
 if [ "$(id -u)" = 0 ]; then
-    echo "Bitte OHNE sudo ausfuehren." >&2
+    echo "Please run WITHOUT sudo." >&2
     exit 1
 fi
 
@@ -23,4 +23,4 @@ rm -f "$BIN/battctl" "$UNIT/furios-battery-color.service"
 rm -rf "$DOC"
 systemctl --user daemon-reload
 
-echo "Entfernt. Theme: $(gsettings get org.gnome.desktop.interface gtk-theme 2>/dev/null)"
+echo "Removed. Theme: $(gsettings get org.gnome.desktop.interface gtk-theme 2>/dev/null)"

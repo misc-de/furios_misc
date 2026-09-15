@@ -4,27 +4,27 @@
 #
 # Installs into the user's home. No root anywhere: this reads two files in
 # /sys, writes ~/.themes and sets one gsettings key - all of it things the
-# session may do anyway. NIE mit sudo starten.
+# session may do anyway. NEVER start it with sudo.
 set -euo pipefail
 
 if [ "$(id -u)" = 0 ]; then
-    echo "Bitte OHNE sudo ausfuehren - das Programm laeuft in der Nutzersitzung." >&2
+    echo "Please run WITHOUT sudo - the program runs in the user session." >&2
     exit 1
 fi
 
 # Checked before anything is installed. Without gsettings the colour can be
 # computed and never shown, and a tool that installs cleanly and then does
 # nothing is harder to understand than one that refuses.
-fehlt=()
-command -v gsettings >/dev/null || fehlt+=("gsettings (Paket libglib2.0-bin)")
-python3 - <<'PRUEFUNG' 2>/dev/null || fehlt+=("python3-gi")
+missing=()
+command -v gsettings >/dev/null || missing+=("gsettings (Paket libglib2.0-bin)")
+python3 - <<'CHECK' 2>/dev/null || missing+=("python3-gi")
 import gi
 gi.require_version("Gio", "2.0")
 from gi.repository import Gio, GLib  # noqa: F401
-PRUEFUNG
-if [ ${#fehlt[@]} -gt 0 ]; then
-    printf 'Fehlt: %s\n' "${fehlt[@]}" >&2
-    echo "Nichts wurde installiert." >&2
+CHECK
+if [ ${#missing[@]} -gt 0 ]; then
+    printf 'Missing: %s\n' "${missing[@]}" >&2
+    echo "Nothing was installed." >&2
     exit 1
 fi
 
@@ -48,10 +48,10 @@ if systemctl --user is-active --quiet furios-battery-color.service; then
 fi
 
 echo
-echo "Installiert. Zustand:"
+echo "Installed. State:"
 "$BIN/battctl" status || true
 echo
 if ! systemctl --user is-enabled --quiet furios-battery-color.service; then
-    echo "Einschalten:  systemctl --user enable --now furios-battery-color.service"
-    echo "(oder in der App unter \"Battery\")"
+    echo "Turn it on:  systemctl --user enable --now furios-battery-color.service"
+    echo "(or in the app, under \"Battery\")"
 fi

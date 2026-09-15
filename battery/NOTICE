@@ -1,19 +1,26 @@
-Dieses Projekt enthaelt ausschliesslich eigenen Code (MIT, siehe LICENSE).
+This project contains only code of our own (MIT, see LICENSE).
 
-Es verwendet zur Laufzeit:
-  - GLib und Gio (LGPL-2.1+), ueber GObject-Introspection - fuer die
-    Hauptschleife und das Abo bei UPower
-  - gsettings aus glib2.0-bin (LGPL-2.1+), zum Lesen und Setzen von
-    org.gnome.desktop.interface gtk-theme
-  - UPower (GPL-2.0+), nur als Taktgeber: es wird ein Signal abonniert,
-    nichts aufgerufen und nichts veraendert
+At runtime it uses:
+  - GLib and Gio (LGPL-2.1+), through GObject Introspection - for the main
+    loop and the subscription to UPower
+  - gsettings from glib2.0-bin (LGPL-2.1+), to read and set
+    org.gnome.desktop.interface gtk-theme and icon-theme
+  - UPower (GPL-2.0+), only as a clock: one signal is subscribed to, nothing
+    is called and nothing is changed
 
-Es liest, ohne sie zu veraendern:
-  - /sys/class/power_supply/battery/{status,current_now,voltage_now}
+It reads, without changing them:
+  - /sys/class/power_supply/battery/{status,current_now,voltage_now,capacity}
+  - the battery icons of the Adwaita icon theme (CC-BY-SA 3.0 / LGPL-3), as
+    the source for its own copies
 
-Es erzeugt drei GTK-3-Themes unter ~/.themes, die aus einer @import-Zeile auf
-das Theme des Nutzers und einer Farbregel bestehen. Das Theme des Nutzers -
-auf diesem Telefon adw-gtk3 (MIT) - wird dabei nicht kopiert, nicht veraendert
-und nicht neu lizenziert.
+It creates, under ~/.local/share/icons and ~/.themes:
+  - three GTK 3 themes consisting of an @import line onto the user's own
+    theme plus one colour rule
+  - an icon theme `furios-battery` that inherits the user's own and replaces
+    eight battery icons with versions whose filling is a path of its own
 
-Kein Bestandteil von FuriOS wird gepatcht oder ersetzt.
+The user's own theme - adw-gtk3 (MIT) on this phone - and the Adwaita icons
+are neither copied wholesale, nor changed, nor relicensed; `battctl restore`
+removes everything that was generated.
+
+No part of FuriOS is patched or replaced.

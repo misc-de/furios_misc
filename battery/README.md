@@ -1,102 +1,100 @@
-# battery — das Akkusymbol sagt, was es weiss
+# battery — the battery icon says what it knows
 
-Das FuriPhone zeigt beim Laden einen Blitz und eine Prozentzahl. Beides sieht
-gleich aus, ob ein Watt hineingeht oder sechs — und genau das ist die Zahl,
-die man sehen will: ein muedes Kabel, ein Laptop-Port oder ein Netzteil, das
-sich still neu verhandelt hat, sehen alle aus wie „laedt" und kosten Stunden.
+While charging, the FuriPhone shows a bolt and a percentage. Both look the
+same whether one watt is going in or six — and that is exactly the number
+worth seeing: a tired cable, a laptop port or a charger that has quietly
+renegotiated all look like "charging" and cost hours.
 
-Das Symbol besteht aus zwei Teilen, und die sagen ab jetzt zwei
-verschiedene Dinge:
+The icon has two parts, and from now on they say two different things:
 
-| | was es sagt | |
+| | what it says | |
 |---|---|---|
-| **Rahmen und Blitz** | wie schnell sich der Akku bewegt | gruen · orange · rot |
-| **Fuellung** | wie voll er ist | schlicht · orange · rot |
+| **frame and bolt** | how fast the battery is moving | green · amber · red |
+| **filling** | how full it is | plain · amber · red |
 
-Also: **gruen**, wenn viel hineingeht, **orange** dazwischen, **rot**, wenn
-sich kaum etwas bewegt — und die Fuellung darin faerbt sich unabhaengig
-davon, wenn der Ladestand knapp wird.
+So: **green** when a lot is going in, **amber** in between, **red** when
+hardly anything is moving — and the filling inside takes colour independently
+of that when the charge level runs short.
 
-![Die Zustaende](doc/zustaende.png)
+![The states](doc/states.png)
 
-(Mit GTKs eigenem Renderer aus den echten Symbolen gezeichnet, nicht
-nachgemalt: `python3 doc/make-zustaende.py`. Die Schwellen in der Tafel sind
-die Vorgaben — gemessene koennen andere sein.)
+(Drawn with GTK's own renderer from the real icons, not painted by hand:
+`python3 doc/make-states.py`. The thresholds in the chart are the
+defaults — measured ones may differ.)
 
-Die Farbe der Huelle im Akkubetrieb ist ausgeschaltet, bis man sie
-einschaltet; die Fuellung faerbt sich immer, weil ein fast leerer Akku das
-sagen soll, ob er nun laedt, entlaedt oder voll ist.
+The colour of the frame on battery is switched off until somebody switches it
+on; the filling always takes colour, because a nearly empty battery should
+say so whether it is charging, discharging or full.
 
-Eine wackelnde Verbindung — defekte Buchse, mueder Stecker — laesst das
-Telefon zwischen Laden und Entladen springen. Der Huelle folgt das **nicht**:
-sie bleibt farblos, solange sich die Messungen einer Minute nicht ueber die
-Richtung einig sind. Sonst waere die Farbe eine Anzeige des Kabels.
+A wobbling connection — a broken socket, a tired plug — makes the phone jump
+between charging and discharging. The frame does **not** follow that: it
+stays plain as long as the readings of one minute do not agree about the
+direction. Otherwise the colour would be an indicator of the cable.
 
-Damit das im Akkubetrieb ueberhaupt geht, bringt `battctl` ein eigenes
-**Symbolthema** mit: Adwaita zeichnet die Entlade-Batterie als EINEN Pfad,
-in dem der Ladestand steckt, und kein CSS kommt dort allein hin. Das Thema
-`furios-battery` erbt das eigene Thema des Nutzers und ersetzt nur acht
-Dateien durch Fassungen mit einer eigenen Fuellflaeche; es liegt unter
-`~/.local/share/icons` und geht mit `battctl restore` wieder weg.
+For this to work on battery at all, `battctl` brings an **icon theme** of its
+own: Adwaita draws the discharge battery as ONE path with the level inside
+it, and no CSS reaches that alone. The theme `furios-battery` inherits the
+user's own theme and replaces only eight files with versions that have a
+filling area of their own; it lives under `~/.local/share/icons` and goes
+away again with `battctl restore`.
 
-Ein Thema, und nicht ein paar Dateien in `~/.local/share/icons/Adwaita`:
-das waere der kuerzere Weg und hat eine Falle. GTK merkt sich, wo es ein
-Symbol gefunden hat; verschwindet die Datei wieder, zeichnet die Leiste
-das Platzhaltersymbol und erholt sich nicht mehr — auch nicht, wenn man
-die Datei zurueckschreibt. Nur ein Wechsel der Themen-Einstellung laesst
-GTK neu suchen, und der ist hier deshalb sowohl der Hinweg als auch der
-Rueckweg. Wo eine Fassung fehlt, faellt die Anzeige auf eine Farbe fuers
-ganze Symbol zurueck — die dringlichere der beiden.
+A theme, and not a few files in `~/.local/share/icons/Adwaita`: that would be
+the shorter way and it has a trap. GTK remembers where it found an icon; when
+that file disappears, the bar draws the placeholder icon and does not recover
+— not even when the file is written straight back. Only a change of the theme
+setting makes GTK look again, which is why that setting is both the way in
+and the way out here. Where a version is missing, the display falls back to
+one colour for the whole icon — the more urgent of the two.
 
-Und wenn Kernel und UPower sich ueber die Richtung widersprechen, bleibt der
-Rahmen farblos: phosh zeichnet dann ein Symbol, zu dem die Farbe nicht
-passt. Details in FINDINGS.md.
+And when the kernel and UPower contradict each other about the direction, the
+frame stays plain: phosh then draws an icon the colour does not fit. Details
+in FINDINGS.md.
 
 ```
 git clone https://github.com/misc-de/furios_misc
 cd furios_misc/battery
-./install.sh                 # NIE mit sudo - es braucht gar kein root
+./install.sh                 # NEVER with sudo - it needs no root at all
 systemctl --user enable --now furios-battery-color.service
 ```
 
-Oder in der App *misc-de* unter **Battery**.
+Or in the app *misc-de*, under **Battery**.
 
-## Wie die Farbe an das Symbol kommt
+## How the colour reaches the icon
 
-phosh ist GTK3, und sein Akkusymbol ist der CSS-Knoten `phosh-battery-info`.
-Eine Zeile CSS faerbt es:
+phosh is GTK3, and its battery icon is the CSS node `phosh-battery-info`. One
+line of CSS colours it:
 
 ```css
 phosh-battery-info image {
-  color: #e01b24;                                  /* Huelle: 1 W gehen rein */
+  color: #e01b24;                                  /* frame: 1 W going in  */
   -gtk-icon-palette: success #ff7800, warning #ff7800, error #ff7800;
-}                                                  /* Fuellung: unter 60 %   */
+}                                                  /* filling: below 60 %  */
 ```
 
-Zwei Deklarationen, weil das Symbol aus **zwei Pfaden** besteht: Huelle und
-Blitz folgen `color`, die Fuellung traegt im Adwaita-SVG `class="success"`
-und kommt aus der Symbol-Palette. Ohne die zweite Zeile bleibt die Fuellung
-weiss in einem roten Akku.
+Two declarations, because the icon consists of **two paths**: frame and bolt
+follow `color`, the filling carries `class="success"` in the Adwaita SVG and
+comes from the symbolic palette. Without the second line the filling stays
+white inside a red battery.
 
-Alle drei Palettennamen bekommen dieselbe Farbe, weil die Fuellung unter
-20 % `warning` bzw. `error` heisst — die Farbe soll vom Ladestand kommen und
-nicht davon, welche Datei phosh gerade gegriffen hat.
+All three palette names get the same colour, because below 20 % the filling
+is called `warning` or `error` — the colour should come from the charge
+level and not from which file phosh happened to pick.
 
-Fehlt eine der beiden Aussagen, fehlt die Zeile: ein Regelwerk ohne `color`
-laesst die Huelle in der Farbe der Leiste, eines ohne Palette die Fuellung.
-Ein „weiss" hinzuschreiben hiesse, einen Vordergrund zu raten, den wir nicht
-lesen koennen.
+Where one of the two statements is absent, the line is absent: a rule without
+`color` leaves the frame in the colour of the bar, one without the palette
+leaves the filling in it. Writing a "white" would mean guessing at a
+foreground we cannot read.
 
-Der naheliegende Ort dafuer ist `~/.config/gtk-3.0/gtk.css` — und der ist eine
-Sackgasse: GTK3 liest die Datei **einmal beim Programmstart** und nie wieder.
-Eine Farbe, die sich aendert, braeuchte also bei jedem Wechsel einen Neustart
-der Shell, und das ist auf diesem Telefon das Einzige, was man nicht tut.
+The obvious place for all this is `~/.config/gtk-3.0/gtk.css` — and it is a
+dead end: GTK3 reads that file **once at program start** and never again. A
+colour that changes would therefore need the shell restarted at every change,
+and that is the one thing not to do on this phone.
 
-Was GTK3 zur Laufzeit sehr wohl neu liest, ist das **Theme**. Ein
-`gsettings set org.gnome.desktop.interface gtk-theme …` restyled jede
-laufende GTK-3-Anwendung binnen einer Sekunde, phosh eingeschlossen. Dieses
-Projekt schreibt deshalb drei Themes, die nichts weiter sind als das Theme
-des Nutzers plus jene eine Zeile:
+What GTK3 does re-read at runtime is the **theme**. A
+`gsettings set org.gnome.desktop.interface gtk-theme …` restyles every
+running GTK 3 application within a second, phosh included. So this project
+writes themes that are nothing more than the user's theme plus that one rule,
+and switches between them:
 
 ```
 ~/.themes/adw-gtk3-batt7e17-red-amber/gtk-3.0/gtk.css
@@ -104,100 +102,95 @@ des Nutzers plus jene eine Zeile:
     phosh-battery-info image { color: …; -gtk-icon-palette: …; }
 ```
 
-Der Name traegt beide Haelften, weil beide in derselben Datei stehen. Die
-Kombinationen werden erst geschrieben, wenn sie gebraucht werden — zwoelf
-Verzeichnisse in `~/.themes` waeren zwoelf Eintraege in jeder Theme-Auswahl
-auf dem Telefon.
+The name carries both halves, because both stand in the same file. The
+combinations are written only when they are needed — twelve directories in
+`~/.themes` would be twelve entries in every theme chooser on the phone.
 
-Die vier Zeichen im Namen sind die Kennung der Regel. Sie stehen dort, weil
-GTK3 ein benanntes Theme **fuer die Lebensdauer des Prozesses** zwischen-
-speichert, nach Namen und ohne zweiten Blick auf die Datei: aendert man die
-Regel und behaelt den Namen, zeigt phosh bis zum naechsten Neustart weiter
-die Fassung von damals.
+The four characters in the name are the fingerprint of the rule. They are
+there because GTK3 caches a named theme **for the lifetime of the process**,
+by name and without a second look at the file: change the rule and keep the
+name, and phosh keeps showing the version from back then until the next
+restart.
 
-…und schaltet zwischen ihnen um.
+**What that costs** — this belongs before the decision, not after it: every
+change briefly restyles all GTK 3 applications, and the theme setting shows
+one of our names while it lasts. It happens at a colour change, not
+continuously: a handful of times per charge. Anybody who changes their theme
+themselves is not overruled — the service notices, builds on the new one and
+carries the colour over.
 
-**Was das kostet** — das gehoert vor die Entscheidung, nicht dahinter: jeder
-Wechsel restyled kurz alle GTK-3-Anwendungen, und die Theme-Einstellung zeigt
-solange einen unserer Namen. Es passiert beim Farbwechsel, nicht laufend: ein
-paar Mal pro Ladung. Wer sein Theme selbst umstellt, wird nicht ueberstimmt —
-der Dienst merkt es, baut auf dem neuen auf und traegt die Farbe hinueber.
+## Thresholds
 
-## Schwellen
-
-| | schlicht | gruen | orange | rot |
+| | plain | green | amber | red |
 |---|---|---|---|---|
-| Huelle, Laden | — | ab 7 W | ab 3 W | darunter |
-| Huelle, Entladen | unter 3 W | — | ab 3 W | ab 5 W |
-| Fuellung | ueber 60 % | — | unter 60 % | unter 15 % |
+| frame, charging | — | from 7 W | from 3 W | below that |
+| frame, on battery | below 3 W | — | from 3 W | from 5 W |
+| filling | above 60 % | — | below 60 % | below 15 % |
 
-Im Akkubetrieb ist **weiss der Normalfall**: ein Telefon, das tut, was ein
-Telefon tut, sagt nichts, und nur ein ungewoehnlicher Verbrauch meldet sich.
-Gruen gibt es dort nicht - eine Farbe, die den ganzen Tag leuchtet, ist keine
-Nachricht mehr.
+On battery, **plain is the normal case**: a phone doing what a phone does
+says nothing, and only an unusual drain speaks up. There is no green there —
+a colour that shines all day is not a message any more.
 
-Die Werte sind **vorlaeufig**. Sie gehoeren gemessen, nicht geraten - dafuer
-gibt es `battctl watch`:
-
-```
-battctl watch 3600 --csv ~/verbrauch.csv     # eine Stunde mitschreiben
-```
-
-…und `battctl summarise`, das eine solche Mitschrift auswertet:
+The values are **provisional**. They belong measured, not guessed — that is
+what `battctl watch` is for:
 
 ```
-battctl summarise ~/verbrauch.csv            # was drinsteht und was es vorschlaegt
-battctl summarise ~/verbrauch.csv --apply    # und setzt es
+battctl watch 3600 --csv ~/drain.csv          # write along for an hour
 ```
 
-Es trennt dabei nach Zustand UND nach Bildschirm, und die Schwellen kommen
-**nur aus der Haelfte mit eingeschaltetem Bildschirm**: dieses Symbol sieht
-nur, wer hinschaut, also ist „normal" das, was das Telefon im Gebrauch
-zieht. Vorgeschlagen wird **orange bei p90, rot bei p98** — dann meldet sich
-das ungewoehnliche Zehntel und der Rest bleibt schlicht. Unter 30 Messungen
-mit Bildschirm an, oder wenn p90 und p98 auf derselben Zahl landen, setzt es
-nichts und sagt warum.
+…and `battctl summarise`, which evaluates such a log:
 
-Wichtig dabei: fuer den Akkubetrieb zaehlt der Verbrauch mit **einge-
-schaltetem Bildschirm**. Dieses Symbol sieht nur, wer auf den Bildschirm
-schaut - die 0,2 W eines Telefons auf dem Tisch sind keine sinnvolle Basis.
-Die Mitschrift traegt deshalb den Wert der Hintergrundbeleuchtung mit.
+```
+battctl summarise ~/drain.csv            # what is in it and what it suggests
+battctl summarise ~/drain.csv --apply    # and sets it
+```
 
-Das Telefon handelt ueber USB-PD 12,7 W aus, gemessen wurden bisher
-hoechstens 5,9 W - auch die Ladeschwellen sind also noch nicht bestaetigt.
+It splits by state AND by screen, and the thresholds come **only from the
+half with the screen on**: this icon is seen only by somebody looking, so
+"normal" is what the phone draws in use. What it suggests is **amber at p90,
+red at p98** — then the unusual tenth speaks up and the rest stays plain.
+Below 30 readings with the screen on, or when p90 and p98 land on the same
+number, it sets nothing and says why.
+
+Important here: for the battery case what counts is the drain with the
+**screen on**. The 0.2 W of a phone on a table is no sensible baseline. The
+log therefore carries the state of the panel along in a column.
+
+The phone negotiates 12.7 W over USB-PD, but at most 5.9 W has been measured
+so far — so the charging thresholds are not confirmed either.
 
 ```
 battctl config charge-green-w 6
 battctl config drain-amber-w 2.5
 battctl config discharging on
 battctl config level-amber-pct 50
-battctl config level off        # Fuellung gar nicht faerben
-battctl config                  # alles, was es gibt
+battctl config level off        # do not colour the filling at all
+battctl config                  # everything there is
 ```
 
-Damit die Farbe nicht auf dem Rauschen flackert — `current_now` springt um ein
-Viertel Ampere zwischen zwei Messungen — entscheidet nicht der letzte Wert,
-sondern der **Median** einer Minute; eine Schwelle muss um ein Zehntel
-ueberschritten werden, bevor die Farbe folgt, und jede Farbe bleibt
-mindestens 45 Sekunden stehen.
+So that the colour does not flicker on the noise — `current_now` jumps by a
+quarter of an amp between two readings — it is not the last value that
+decides but the **median** of a minute; a threshold has to be crossed by a
+tenth before the colour follows, and every colour stays for at least 45
+seconds.
 
-## Was es anfasst
+## What it touches
 
-Nichts, wofuer es root braeuchte. Es liest drei Dateien unter
-`/sys/class/power_supply/battery`, schreibt `~/.themes` und setzt einen
-gsettings-Schluessel. `battctl restore` nimmt alles davon zurueck,
-`./uninstall.sh` zusaetzlich das Programm.
+Nothing it would need root for. It reads four files under
+`/sys/class/power_supply/battery`, writes `~/.themes` and
+`~/.local/share/icons`, and sets two gsettings keys. `battctl restore` takes
+all of that back, `./uninstall.sh` the program as well.
 
-Der Taktgeber ist **UPower**: es fragt den Akku ohnehin fuer das ganze
-Telefon ab, also wird sein Signal abonniert, statt selbst zu pollen. Ein
-langsamer Zeitgeber (120 s) laeuft als Netz darunter mit.
+The clock is **UPower**: it polls the battery for the whole phone anyway, so
+its signal is subscribed to rather than polling ourselves. A slow timer
+(120 s) runs underneath as a net.
 
 ## Tests
 
 ```
-tests/run-tests.sh      # ohne Display, ohne Akku, ohne root - NIE mit sudo
+tests/run-tests.sh      # no display, no battery, no root - NEVER with sudo
 tests/coverage.sh
 ```
 
-156 Tests, 89,4 % der Zeilen. Was fehlt, ist die D-Bus-Verdrahtung des Daemons
-— die wird am Geraet belegt, nicht simuliert (FINDINGS.md).
+156 tests, 89.6 % of the lines. What is missing is the D-Bus wiring of the
+daemon — that is proven on the device, not simulated (FINDINGS.md).

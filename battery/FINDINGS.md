@@ -1,9 +1,9 @@
-# Was beim Bauen gemessen wurde
+# What was measured while building this
 
-Alles hier am FuriPhone FLX1 nachgemessen, FuriOS mit phosh 0.55,
-GTK 3.24.52, Kernel 4.19.325.
+All of it measured on the FuriPhone FLX1, FuriOS with phosh 0.55,
+GTK 3.24.52, kernel 4.19.325.
 
-## 1 · Die Ladeleistung steht im Akku selbst
+## 1 · The charging power is in the battery itself
 
 ```
 /sys/class/power_supply/battery/current_now   in µA
@@ -11,89 +11,87 @@ GTK 3.24.52, Kernel 4.19.325.
 /sys/class/power_supply/battery/status        Charging | Discharging | Full | Not charging
 ```
 
-Produkt = Leistung **in den Akku**. Am 15.9.2026 um 14:19 waren das
-1,07–1,36 A bei 4,32 V, also **4,6–5,9 W**; zwei Minuten spaeter nur noch
-0,23–0,46 A, also **1,0–1,9 W**, und `time_to_full_now` sprang von 49 auf
-200 Minuten.
+The product is the power **into the battery**. On 15.9.2026 at 14:19 that was
+1.07-1.36 A at 4.32 V, so **4.6-5.9 W**; two minutes later only 0.23-0.46 A,
+so **1.0-1.9 W**, and `time_to_full_now` jumped from 49 to 200 minutes.
 
-Der Einbruch ist **erklaert, und zwar ausserhalb der Software**: die
-USB-Buchse dieses Geraets ist defekt, die Verbindung wackelt (Auskunft des
-Nutzers, 15.9.). Ausgeschlossen war vorher schon alles Thermische (Akku
-36,6 °C und fallend, `sw_jeita` = 0, keine Thermalzone ueber 45 °C) und die
-CV-Phase (Ladestand 76 %, dafuer zu frueh).
+The drop is **explained, and outside the software**: the USB socket of this
+device is broken, the connection wobbles (told by the user, 15.9.). Everything
+thermal had already been ruled out (battery 36.6 °C and falling, `sw_jeita` =
+0, no thermal zone above 45 °C), and so had the CV phase (charge level 76 %,
+too early for it).
 
-Messbar ist das an der **Richtung**: in 26 Minuten wechselte der Zustand
-neunmal zwischen `Charging` und `Discharging`. Zwei Folgen:
+It is measurable in the **direction**: in 26 minutes the state changed nine
+times between `Charging` and `Discharging`. Two consequences:
 
-- Eine Kalibrierung der LADE-Schwellen ist an diesem Geraet vorerst
-  sinnlos. `battctl watch` zaehlt die Richtungswechsel und sagt es am Ende
-  von selbst („direction changed N times ... not a baseline"). Die
-  Entlade-Seite bleibt brauchbar.
-- Der Dienst darf einer wackelnden Richtung nicht folgen. Jeder Farbwechsel
-  restyled alle GTK-3-Anwendungen, und gemessen waere das etwa einmal pro
-  Minute gewesen — fuer etwas, das das Kabel tut und nicht der Akku. Die
-  Huelle bleibt deshalb farblos, solange die Messungen eines ganzen
-  Fensters sich nicht ueber die Richtung einig sind. Der Ladestand faerbt
-  weiter: die Prozentzahl ist dieselbe, in welche Richtung der Strom auch
-  fliesst.
+- Calibrating the CHARGING thresholds is pointless on this device for now.
+  `battctl watch` counts the direction changes and says so by itself
+  ("direction changed N times ... not a baseline"). The discharge side stays
+  usable.
+- The service must not follow a wobbling direction. Every colour change
+  restyles all GTK 3 applications, and measured that would have been about
+  once a minute — for something the cable is doing and not the battery. The
+  frame therefore stays plain as long as the readings of a whole window do
+  not agree about the direction. The charge level keeps its colour: the
+  percentage is the same number whichever way the current is flowing.
 
-Die Momentanwerte schwanken um **±0,3 A** von Sekunde zu Sekunde. `current_avg`
-des Treibers glaettet, haengt aber lange nach (0,84 → 0,45 A in einer Minute).
-Deshalb hier: eigener Median ueber eine Minute.
+The instantaneous values swing by **±0.3 A** from second to second. The
+driver's `current_avg` smooths but lags badly (0.84 → 0.45 A in one minute).
+Hence a median of our own, over one minute.
 
-## 2 · Wandseitig laesst sich nichts messen
+## 2 · Nothing can be measured on the wall side
 
-- Kernel 4.19 hat die `usb_power_delivery`-Klasse noch nicht — kein
-  ausgehandelter Vertrag, keine VBUS-Stromstaerke.
+- Kernel 4.19 does not have the `usb_power_delivery` class yet — no
+  negotiated contract, no VBUS current.
 - `/sys/devices/platform/charger/{input_current,chg1_current,chg2_current}`
-  liefern alle `4294967295` (0xFFFFFFFF, „nicht gesetzt") und sind wertlos.
-- Brauchbar sind nur `ADC_Charger_Voltage` = **4587 mV** (also 5-V-Vertrag)
-  und `pdc_max_watt` = **12684000** µW = **12,68 W** als ausgehandeltes
-  Maximum. Der Akku nahm davon zeitweise ein Achtel.
-- `/sys/class/typec/port0/power_operation_mode` sagt `usb_power_delivery`.
+  all deliver `4294967295` (0xFFFFFFFF, "not set") and are worthless.
+- Usable are only `ADC_Charger_Voltage` = **4587 mV** (so a 5 V contract) and
+  `pdc_max_watt` = **12684000** µW = **12.68 W** as the negotiated maximum.
+  The battery took an eighth of that at times.
+- `/sys/class/typec/port0/power_operation_mode` says `usb_power_delivery`.
 
-## 3 · Ein Treiberfehler, ueber den man bei der Akkugesundheit stolpert
+## 3 · A driver bug you trip over at battery health
 
 ```
 charge_full         4370000 µAh
-charge_full_design   437000 µAh     <- Faktor 10 zu klein
+charge_full_design   437000 µAh     <- a factor of 10 too small
 ```
 
-Deshalb behauptet upower `energy-full-design: 1,89 Wh` und `capacity: 100 %`.
-Der Gesundheitswert von upower ist auf diesem Telefon **bedeutungslos**. Die
-echten Zahlen: 4370 mAh, 205 Ladezyklen.
+That is why upower claims `energy-full-design: 1.89 Wh` and
+`capacity: 100 %`. Upower's health figure is **meaningless** on this phone.
+The real numbers: 4370 mAh, 205 charge cycles.
 
-## 4 · Die Sackgasse: ~/.config/gtk-3.0/gtk.css
+## 4 · The dead end: ~/.config/gtk-3.0/gtk.css
 
-GTK3 liest die Nutzerdatei **einmal beim Start** des Programms. Zwei
-Messungen:
+GTK3 reads the user file **once at the start** of the program. Two
+measurements:
 
-- Die Datei existierte hier gar nicht, als phosh startete — phosh hat also
-  ueberhaupt keinen User-Provider. Angelegt, drei Sekunden gewartet,
-  Screenshot: unveraendert.
-- Auch mit Datei wuerde jede Aenderung erst beim naechsten Start wirken. Fuer
-  eine Farbe, die sich stuendlich aendert, hiesse das: Shell neustarten, und
-  das ist auf diesem Telefon die eine Sache, die man nicht tut
+- The file did not exist here at all when phosh started — so phosh has no
+  user provider whatsoever. Created it, waited three seconds, screenshot:
+  unchanged.
+- Even with the file, every change would only take effect at the next start.
+  For a colour that changes hourly that would mean: restart the shell, and
+  that is the one thing not to do on this phone
   (`OnFailure=gnome-session-shutdown`).
 
-## 5 · Was live wirkt: der Theme-Name
+## 5 · What works live: the theme name
 
-`gsettings set org.gnome.desktop.interface gtk-theme <name>` schlaegt sofort
-durch. Am Geraet mit Screenshots belegt (`grim`, das ueber
-zwlr_screencopy auf phoc funktioniert — Paket `grim`, nicht vorinstalliert):
+`gsettings set org.gnome.desktop.interface gtk-theme <name>` takes effect at
+once. Proven on the device with screenshots (`grim`, which works over
+zwlr_screencopy on phoc — package `grim`, not preinstalled):
 
-1. Ausgangslage: Symbol weiss.
-2. Theme `furios-batt-test` (adw-gtk3 + `color: #ff00ff` auf
-   `phosh-battery-info, … image, … label`) → Symbol **und** Prozentzahl
-   magenta, **ohne** phosh anzufassen.
-3. Theme `furios-batt-test2` mit `phosh-battery-info image { color: #2ec27e }`
-   → Symbol gruen, Prozentzahl bleibt weiss. Der Wechsel von einem eigenen
-   Theme zum naechsten wirkt genauso — es ist also wiederholbar, nicht nur
-   „einmal etwas anderes".
-4. Zurueck auf `adw-gtk3` → wieder weiss.
+1. Starting point: icon white.
+2. Theme `furios-batt-test` (adw-gtk3 plus `color: #ff00ff` on
+   `phosh-battery-info, … image, … label`) → icon **and** percentage
+   magenta, **without** touching phosh.
+3. Theme `furios-batt-test2` with
+   `phosh-battery-info image { color: #2ec27e }` → icon green, percentage
+   stays white. The switch from one theme of ours to the next works the same
+   way — so it is repeatable, not merely "something different once".
+4. Back to `adw-gtk3` → white again.
 
-Der CSS-Knoten heisst `phosh-battery-info`. Gefunden nicht im Inspector
-(der braeuchte einen Neustart der Shell), sondern in den Ressourcen:
+The CSS node is called `phosh-battery-info`. Found not in the inspector (that
+would need the shell restarted) but in the resources:
 
 ```
 gresource list /usr/libexec/phosh | grep css
@@ -101,183 +99,173 @@ gresource extract /usr/libexec/phosh /mobi/phosh/stylesheet/common.css
 strings /usr/libexec/phosh | grep phosh-battery
 ```
 
-## 5a · Das Symbol hat zwei Pfade, und einer blieb weiss
+## 5a · The icon has two paths, and one stayed white
 
-Am Geraet gesehen, nachdem die erste Fassung lief: Huelle und Blitz rot, die
-**Fuellung weiss**. Das Adwaita-SVG erklaert es:
+Seen on the device after the first version was running: frame and bolt red,
+the **filling white**. The Adwaita SVG explains it:
 
 ```
-<path class="success" d="m 5 7 v 6 h 3 …" fill="#33d17a"/>   <- der Ladestand
-<path d="m 7 0 c -1 0 …" fill="#2e3434"/>                     <- Huelle+Blitz
+<path class="success" d="m 5 7 v 6 h 3 …" fill="#33d17a"/>   <- the level
+<path d="m 7 0 c -1 0 …" fill="#2e3434"/>                     <- frame+bolt
 ```
 
-`color` faerbt nur den zweiten. Der erste kommt aus GTK3s Symbol-Palette und
-wird mit `-gtk-icon-palette: success …, warning …, error …` gesetzt. Kopflos
-nachgewiesen (`Gtk.IconInfo.load_symbolic`): mit success=rot sind 112 von 112
-deckenden Pixeln rot, mit success=weiss bleiben genau 24 weiss - das ist die
-Fuellung. `Gtk.CssProvider` nimmt die Eigenschaft ohne Parsefehler an.
+`color` only colours the second. The first comes from GTK3's symbolic palette
+and is set with `-gtk-icon-palette: success …, warning …, error …`. Proven
+headless (`Gtk.IconInfo.load_symbolic`): with success=red, 112 of 112 opaque
+pixels are red; with success=white exactly 24 stay white — that is the
+filling. `Gtk.CssProvider` accepts the property without a parsing error.
 
-Alle drei Palettennamen bekommen dieselbe Farbe: unter 20 % ist die Fuellung
-`warning` bzw. `error` statt `success`. Die Farbe soll vom Ladestand kommen
-und nicht davon, welche Datei phosh gegriffen hat.
+All three palette names get the same colour: below 20 % the filling is
+`warning` or `error` rather than `success`. The colour should come from the
+charge level and not from which file phosh grabbed.
 
-**Und daraus wurde die eigentliche Aufteilung** (Entscheidung des Nutzers,
-15.9. abends): die beiden Pfade sagen zwei verschiedene Dinge — die Huelle
-die Leistung, die Fuellung den Ladestand (schlicht ueber 60 %, orange
-darunter, rot unter 15 %). Beide stehen in derselben Regel, also traegt der
-Theme-Name beide Haelften (`adw-gtk3-batt7e17-red-amber`), und die
-Kombinationen werden erst geschrieben, wenn sie gebraucht werden: zwoelf
-Verzeichnisse in ~/.themes waeren zwoelf Eintraege in jeder Theme-Auswahl.
-Am Geraet belegt, indem die Schwelle kurz auf 90 % gesetzt wurde: rote
-Huelle bei 1,1 W, orange Fuellung bei 85 % — ein Symbol, zwei Aussagen.
+**And out of that came the actual division** (decided by the user, 15.9. in
+the evening): the two paths say two different things — the frame the power,
+the filling the charge level (plain above 60 %, amber below, red below 15 %).
+Both stand in the same rule, so the theme name carries both halves
+(`adw-gtk3-batt7e17-red-amber`), and the combinations are written only when
+they are needed: twelve directories in ~/.themes would be twelve entries in
+every theme chooser. Proven on the device by moving the threshold to 90 % for
+a minute: red frame at 1.1 W, amber filling at 85 % — one icon, two
+statements.
 
-## 5b · GTK3 merkt sich ein Theme nach NAMEN, nicht nach Datei
+## 5b · GTK3 remembers a theme by NAME, not by file
 
-`gtk_css_provider_get_named()` haelt geladene Themes in einer statischen
-Tabelle, fuer die Lebensdauer des Prozesses, ohne die Datei erneut anzusehen.
-Die Regel zu aendern und den Namen zu behalten heisst also: die Datei auf der
-Platte ist richtig, phosh zeigt bis zum naechsten Neustart die alte Fassung,
-und nichts sagt warum. Der Theme-Name traegt deshalb vier Zeichen aus einem
-SHA-1 der Regel (`adw-gtk3-batt5ae1-green`). Aeltere Generationen werden beim
-Schreiben mit entfernt, damit sich nicht pro Aktualisierung ein Verzeichnis
-ansammelt.
+`gtk_css_provider_get_named()` keeps loaded themes in a static table, for the
+lifetime of the process, without looking at the file again. Changing the rule
+and keeping the name therefore means: the file on disk is right, phosh shows
+the old version until the next restart, and nothing says why. The theme name
+therefore carries four characters of a SHA-1 of the rule
+(`adw-gtk3-batt7e17-…`). Older generations are removed while the new ones are
+written, so a directory does not accumulate per update.
 
-## 5c · Die Akkusymbole sind DREI Familien, verschieden gebaut
+## 5c · The battery icons are THREE families, built differently
 
-Aufgefallen, weil das Symbol ploetzlich komplett rot war. Adwaita zeichnet
-nicht ein Symbol mit Varianten, sondern drei verschiedene Sorten:
+Noticed because the icon was suddenly completely red. Adwaita does not draw
+one icon with variants, it draws three sorts:
 
-| Datei | Pfade | `color` faerbt | Palette faerbt |
+| File | Paths | `color` colours | palette colours |
 |---|---|---|---|
-| `battery-level-NN-charging-symbolic` | 2 | Huelle + Blitz | die Fuellung |
-| `battery-level-NN-plugged-in-symbolic` | 2 | die Huelle | die Fuellung |
-| `battery-level-NN-symbolic` | **1** | **alles** | **nichts** |
+| `battery-level-NN-charging-symbolic` | 2 | frame + bolt | the filling |
+| `battery-level-NN-plugged-in-symbolic` | 2 | the frame | the filling |
+| `battery-level-NN-symbolic` | **1** | **everything** | **nothing** |
 
-Von den zwoelf Entlade-Symbolen haben nur drei (0, 10, 20 %) einen zweiten
-Pfad — dort faerbt Adwaita den Rest selbst warnend ein. Bei den anderen neun
-gibt es schlicht keine zwei Haelften, und `color` malt das ganze Symbol.
+Of the twelve discharge icons only three (0, 10, 20 %) have a second path —
+there Adwaita colours the remainder as a warning itself. For the other nine
+there are simply no two halves, and `color` paints the whole icon.
 
-Konsequenz zunaechst: die Trennung „Rahmen = Leistung, Fuellung =
-Ladestand" gilt nur, wo das Symbol sie hergibt. Auf einem Symbol aus einem
-Stueck bekommt die **dringlichere** der beiden Farben das ganze Symbol
-(rot > orange > gruen > gar nichts).
+Consequence at first: the division "frame = power, filling = level" only
+holds where the icon allows it. On an icon of one piece the **more urgent**
+of the two colours gets the whole icon (red > amber > green > nothing).
 
-**GELOEST, indem wir dem Symbol die fehlende Flaeche untergelegt haben**
-(Wunsch des Nutzers, 15.9. abends: im Akkubetrieb nur den Rahmen faerben
-und den Ladestand getrennt zeigen). Der Fuellstand ist in diesen Dateien
-ein eigener Teilpfad, aber in relativen Koordinaten — ihn herauszuloesen
-hiesse, den Pfad zu parsen. Stattdessen kommt ein identisches Rechteck mit
-`class="success"` OBEN drauf; die Geometrie ist die des Symbols selbst
-(x 5, Breite 6, Boden bei 13, eine Einheit je 12,5 %) und wurde gegen die
-Originale bei 100, 90, 50 und 30 % geprueft — das Rechteck deckt die
-urspruengliche Flaeche exakt, kein Rand blitzt durch.
+**SOLVED by laying the missing area underneath the icon** (the user's wish,
+15.9. in the evening: on battery colour only the frame and show the charge
+level separately). The filling is a subpath of its own in these files, but in
+relative coordinates — extracting it would mean parsing the path. Instead an
+identical rectangle with `class="success"` goes ON TOP; the geometry is the
+icon's own (x 5, width 6, bottom at 13, one unit per 12.5 %) and was checked
+against the originals at 100, 90, 50 and 30 % — the rectangle covers the
+original area exactly, no edge shows through.
 
-Die acht Fassungen liegen in einem eigenen Symbolthema
-`~/.local/share/icons/furios-battery`, das das Thema des Nutzers erbt;
-`/usr/share` bleibt unberuehrt. Ohne gesetzte Palette sehen sie aus wie die
-Originale, es aendert sich also nichts fuer andere Programme. Die
-Zusammenfuehrung oben bleibt als Rueckfallweg fuer Symbole, zu denen es
-keine Fassung gibt.
+The eight versions live in an icon theme of their own,
+`~/.local/share/icons/furios-battery`, which inherits the user's theme;
+`/usr/share` stays untouched. Without a palette set they look like the
+originals, so nothing changes for other programs. The merging above remains
+as the fallback for icons we have no version of.
 
-**Der erste Versuch war ein eigenes Thema NICHT** — die Dateien lagen unter
-`~/.local/share/icons/Adwaita` und beschatteten die Systemdateien. Das
-funktionierte auf Anhieb und hat eine Falle, die am Geraet aufging: GTK
-merkt sich, WO es ein Symbol gefunden hat. Verschwindet diese Datei, malt
-die Leiste das Platzhaltersymbol — und sie erholt sich nicht, auch nicht,
-wenn man die Datei sofort zurueckschreibt (gemessen: Datei wieder da,
-Symbol weiter kaputt). Nur ein Wechsel der Themen-Einstellung laesst GTK
-neu suchen. Deshalb jetzt ein Thema: `gsettings set … icon-theme` ist der
-Hinweg, derselbe Schalter zurueck ist der Rueckweg, und `battctl restore`
-setzt IMMER erst die Einstellung und loescht erst danach die Dateien.
+**The first attempt was NOT a theme of its own** — the files lay under
+`~/.local/share/icons/Adwaita` and shadowed the system files. That worked at
+the first try and has a trap that went off on the device: GTK remembers WHERE
+it found an icon. When that file disappears, the bar paints the placeholder
+icon — and it does not recover, not even when the file is written straight
+back (measured: file back, icon still broken). Only a change of the theme
+setting makes GTK look again. Hence a theme now:
+`gsettings set … icon-theme` is the way in, the same switch back is the way
+out, and `battctl restore` ALWAYS sets the setting back first and deletes
+only afterwards.
 
-Ausgeloest hat das ein Fehler in unseren eigenen Tests: `cmd_restore` rief
-`remove_split_icons()` ohne Argument, die Testumgebung bog aber nur SYSFS,
-CONFIG und THEMES um - nicht das Symbolverzeichnis. Ein Testlauf hat damit
-die Symbole des laufenden Telefons geloescht. Die Testbasis biegt jetzt
-JEDEN Pfad um, der ins echte Zuhause zeigt (`ICON_BASE`, `ICON_SOURCE`,
-`ICON_DIRS` und die zweite gsettings-Datei), und der Kommentar dort sagt,
-warum das kein Luxus ist.
+What set that off was a fault in our own tests: `cmd_restore` called
+`remove_split_icons()` without an argument while the test environment
+redirected only SYSFS, CONFIG and THEMES — not the icon directory. A test run
+thereby deleted the icons of the running phone. The test base now redirects
+EVERY path that points into the real home (`ICON_BASE`, `ICON_SOURCE`,
+`ICON_DIRS` and the second gsettings file), and the comment there says why
+that is not fussiness.
 
-**Und der Name, den phosh zeichnet, ist nicht der von UPower**: phosh baut
-`battery-level-%d-symbolic` selbst (im Programm nachgelesen), UPower meldet
-`battery-full-symbolic` — zwei verschiedene Dateien, aus zwei
-Verzeichnissen, verschieden gebaut. Wer die falsche befragt, bekommt die
-falsche Antwort auf „hat dieses Symbol zwei Flaechen".
+**And the name phosh draws is not the one from UPower**: phosh builds
+`battery-level-%d-symbolic` itself (read out of the binary), UPower reports
+`battery-full-symbolic` — two different files, from two directories, built
+differently. Asking the wrong one gives the wrong answer to "does this icon
+have two areas".
 
-Welche Familie auf dem Schirm ist, wird nicht geraten: `battctl` fragt
-UPower nach `icon-name` (dieselbe Quelle, der phosh folgt), sucht die Datei
-im Symbolthema und liest nach, ob sie ueberhaupt ein `class=` enthaelt. Erst
-wenn es die Datei nicht gibt, entscheidet der Name.
+## 5d · The kernel and UPower contradict each other
 
-## 5d · Kernel und UPower widersprechen sich
-
-Am 15.9. gemessen, waehrend das Ladegeraet spinnte:
+Measured on 15.9. while the charger was playing up:
 
 ```
-/sys/.../status   Charging      current_now x voltage_now = 1,8 W
+/sys/.../status   Charging      current_now x voltage_now = 1.8 W
 upower            discharging   energy-rate 0 W   icon battery-full-symbolic
 ```
 
-phosh folgt UPower, zeichnete also das Symbol OHNE Blitz — und wir malten
-eine Ladeleistungsfarbe darauf. Aus Sicht des Nutzers: ein komplett rotes
-Akkusymbol bei 86 % ohne erkennbaren Grund.
+phosh follows UPower, so it drew the icon WITHOUT a bolt — and we painted a
+charging-power colour onto it. From the user's point of view: a completely
+red battery icon at 86 % with no visible reason.
 
-Regel daraus: **widersprechen sich die beiden, bekommt die Huelle gar keine
-Farbe.** Eine Farbe, die eine Frage beantwortet, die das Bild nicht stellt,
-ist schlechter als keine. Der Ladestand faerbt weiter — darueber sind sich
-beide Quellen einig.
+The rule from that: **while the two contradict each other, the frame gets no
+colour at all.** A colour that answers a question the picture does not ask is
+worse than none. The charge level keeps its colour — both sources agree about
+that.
 
-## 6 · Die Falle, die das ganze Telefon umgefaerbt haette
+## 6 · The trap that would have recoloured the whole phone
 
-GTK3 nimmt `gtk-dark.css`, wenn es die Datei gibt und die Sitzung dunkel
-bevorzugt. Ein generiertes Theme, das ein `gtk-dark.css` anlegt, obwohl das
-Basis-Theme keines hat, legt damit im Dunkelmodus das **helle** Blatt unter
-die Oberflaeche — die Farbe stimmte, und das Telefon saehe anders aus.
-`write_themes` schreibt das dunkle Blatt deshalb nur, wenn das Basis-Theme
-eines hat, und loescht es wieder, wenn es verschwindet. Test:
-`test_ohne_dunkles_blatt_wird_keines_erfunden`.
+GTK3 takes `gtk-dark.css` when the file exists and the session prefers dark.
+A generated theme that creates a `gtk-dark.css` although the base theme has
+none thereby puts the **light** sheet under the interface in dark mode — the
+colour would be right and the phone would look different. `write_theme`
+therefore writes the dark sheet only when the base theme has one, and deletes
+it again when it disappears. Test:
+`test_no_dark_sheet_is_invented`.
 
-## 7 · Zwei Fallen im eigenen Werkzeug
+## 7 · Two traps in our own tooling
 
-- **`python3 -m trace` + `unittest.main()` = „Ran 0 tests"**, still, mit
-  Rueckgabewert 0 und einem Abdeckungsbericht von 16 %. `unittest.main()`
-  sucht Tests in `sys.modules["__main__"]`, und unter dem Tracer ist das der
-  Tracer. Die Suite wird deshalb von Hand aus `globals()` gebaut (dieselbe
-  Loesung wie in furios_app).
-- **Die Abdeckung hat einen Test entlarvt, der aus dem falschen Grund
-  bestand**: `test_wartezeit_haelt_die_farbe` sprang von 5,2 W auf 8,6 W und
-  erwartete, dass die Wartezeit den Wechsel bremst. Der Median der beiden
-  Messungen lag bei 6,9 W, die Hysterese verlangte 7,7 W — die Farbe blieb,
-  weil sie ohnehin dieselbe war, und die Wartezeit wurde nie erreicht. Die
-  Zeile `return False` blieb unerreicht und hat es verraten.
+- **`python3 -m trace` + `unittest.main()` = "Ran 0 tests"**, silently, with
+  exit code 0 and a coverage report of 16 %. `unittest.main()` looks for
+  tests in `sys.modules["__main__"]`, and under the tracer that is the
+  tracer. The suite is therefore built by hand out of `globals()` (the same
+  solution as in furios_app).
+- **The coverage report unmasked a test that passed for the wrong reason**:
+  `test_the_dwell_time_holds_the_colour` jumped from 5.2 W to 8.6 W and
+  expected the dwell time to hold the change back. The median of the two
+  readings was 6.9 W, the hysteresis demanded 7.7 W — the colour stayed
+  because it was the same one anyway, and the dwell time was never reached.
+  The line `return False` stayed unreached and gave it away.
 
-## 7a · Die Schwellen sind noch nicht gemessen
+## 7a · The thresholds are not measured yet
 
-Die Vorgaben (laden 7/3 W, entladen 3/5 W) sind geraten und als vorlaeufig
-gekennzeichnet. `battctl watch` schreibt die Messreihe mit und nennt am Ende
-Median, p90, p98 und Maximum, getrennt nach Laden und Entladen.
+The defaults (charging 7/3 W, on battery 2/4 W) are guessed and marked as
+provisional. `battctl watch` writes the series along and reports median, p90,
+p98 and maximum at the end, split by charging and discharging;
+`battctl summarise` evaluates such a log and suggests thresholds.
 
-Fuer den Akkubetrieb zaehlt dabei ausdruecklich der Verbrauch mit
-**eingeschaltetem Bildschirm**: das Symbol sieht nur, wer hinschaut, also ist
-"normal" das, was das Telefon im Gebrauch zieht, und nicht die Ruhelast auf
-dem Tisch. Die Mitschrift fuehrt deshalb eine Spalte mit.
+For the battery case what counts is explicitly the drain with the **screen
+on**: the icon is seen only by somebody looking, so "normal" is what the
+phone draws in use and not the idle load on a table.
 
-Was dafuer NICHT taugt, beides hier gemessen: `loginctl … IdleHint` stand bei
-ausgeschaltetem Bildschirm auf `no`, und `/sys/class/leds/lcd-backlight/
-brightness` behielt seinen letzten Wert (629 von 2047). Ein verlaesslicher
-Anzeiger war nur, dass `grim` bei dunklem Bildschirm mit
-`failed to copy output HWCOMPOSER-1` scheitert - fuer eine Messreihe absurd,
-also steht der Rohwert in der Spalte und wer die Reihe auswertet, entscheidet.
+What is NOT good for that, both measured here: `loginctl … IdleHint` stood at
+`no` with the screen dark, and `/sys/class/leds/lcd-backlight/brightness`
+kept its last value (629 of 2047). Both can say "off" and neither can say
+"on". The panel's DPMS state can:
+`/sys/class/drm/card0-DSI-1/dpms` is a state and not a value somebody left
+behind, and that is what the log records.
 
-## 8 · Was hier NICHT geprueft ist
+## 8 · What is NOT checked here
 
-Die D-Bus-Verdrahtung des Daemons (UPower-Abo, Signalbehandlung,
-Hauptschleife) hat keine Tests — ein Abo laesst sich schlecht simulieren, und
-ein simuliertes waere kein Beleg. Es wird am Geraet belegt: Dienst starten,
-Kabel ziehen, Kabel stecken, Journal und Screenshot.
+The D-Bus wiring of the daemon (the UPower subscription, signal handling, the
+main loop) has no tests — a subscription is hard to simulate, and a simulated
+one would be no proof. It is proven on the device: start the service, pull
+the cable, plug it in, journal and screenshot.
 
-Dazu die Warnung aus einem Nachbarprojekt, die hier eingebaut ist: ein Abo,
-dessen Verbindung eingesammelt wird, verfaellt **still** — kein Fehler, kein
-Journaleintrag, ein gesund aussehender Dienst, der nie wieder misst. Der
-Proxy wird deshalb festgehalten, und der 120-s-Zeitgeber laeuft als Netz
-darunter.
+Plus the warning from a sibling project, which is built in here: a
+subscription whose connection is collected expires **silently** — no error,
+no journal entry, a healthy-looking service that never measures again. The
+proxy is therefore held, and the 120 s timer runs underneath as a net.

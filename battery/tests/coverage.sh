@@ -23,16 +23,16 @@ trap 'rm -rf "$OUT"' EXIT
 python3 - "$ROOT/battctl" "$OUT" <<'PY'
 import os, re, sys
 
-quelle, out = sys.argv[1], sys.argv[2]
-zeilen = open(quelle, errors="replace").read().splitlines()
+source_file, out = sys.argv[1], sys.argv[2]
+lines = open(source_file, errors="replace").read().splitlines()
 
 # The entry point at the bottom never runs in an imported module. Counting it
 # would leave the file short by two lines for a reason that has nothing to do
 # with testing.
-ende = len(zeilen)
-for n, zeile in enumerate(zeilen, 1):
-    if zeile.startswith("if __name__"):
-        ende = n - 1
+end_line = len(lines)
+for n, line in enumerate(lines, 1):
+    if line.startswith("if __name__"):
+        end_line = n - 1
         break
 
 # The prefix is exactly six columns and a space: ">>>>>>" for a line that
@@ -40,52 +40,52 @@ for n, zeile in enumerate(zeilen, 1):
 # blanks for a line that cannot run at all. Six and a space, not "whatever
 # whitespace is there" - a greedy \s* would eat the indentation of the source
 # line as well, and the comparison below would never match anything.
-zaehler = re.compile(r"^(>>>>>>|\s*\d+:|\s{6})\s(.*)$")
+counter_re = re.compile(r"^(>>>>>>|\s*\d+:|\s{6})\s(.*)$")
 
 
-def entziffern(pfad):
-    """(Zeilen ohne Zaehler, Trefferliste) einer .cover-Datei."""
-    text, treffer = [], []
-    for roh in open(pfad, errors="replace").read().splitlines():
-        m = zaehler.match(roh)
+def decipher(path):
+    """(lines without their counters, hit list) of a .cover file."""
+    text, hits = [], []
+    for raw in open(path, errors="replace").read().splitlines():
+        m = counter_re.match(raw)
         if m is None:
-            text.append(roh)
-            treffer.append(None)
+            text.append(raw)
+            hits.append(None)
             continue
-        kopf, rest = m.group(1), m.group(2)
+        head, rest = m.group(1), m.group(2)
         text.append(rest)
-        treffer.append("verfehlt" if kopf == ">>>>>>"
-                       else ("getroffen" if kopf.strip() else None))
-    return text, treffer
+        hits.append("missed" if head == ">>>>>>"
+                       else ("hit" if head.strip() else None))
+    return text, hits
 
 
-passend = None
+match = None
 for name in sorted(os.listdir(out)):
     if not name.endswith(".cover"):
         continue
-    text, treffer = entziffern(os.path.join(out, name))
-    if text[:len(zeilen)] == zeilen:
-        passend = (name, treffer)
+    text, hits = decipher(os.path.join(out, name))
+    if text[:len(lines)] == lines:
+        match = (name, hits)
         break
 
-if passend is None:
-    print("  %-20s nicht gemessen - nie importiert" % os.path.basename(quelle))
+if match is None:
+    print("  %-20s not measured - never imported" % os.path.basename(source_file))
     sys.exit(1)
 
-name, treffer = passend
-gesamt = getroffen = 0
-fehlend = []
-for n, zustand in enumerate(treffer[:ende], 1):
-    if zustand is None:
+name, hits = match
+total = hit = 0
+missing = []
+for n, state in enumerate(hits[:end_line], 1):
+    if state is None:
         continue
-    gesamt += 1
-    if zustand == "getroffen":
-        getroffen += 1
+    total += 1
+    if state == "hit":
+        hit += 1
     else:
-        fehlend.append(n)
+        missing.append(n)
 
-quote = getroffen / gesamt * 100 if gesamt else 100.0
-print("  %-20s %6.2f %% von %d Zeilen" % (os.path.basename(quelle), quote, gesamt))
-if fehlend:
-    print("      nicht erreicht:", " ".join(str(n) for n in fehlend[:60]))
+share = hit / total * 100 if total else 100.0
+print("  %-20s %6.2f %% of %d lines" % (os.path.basename(source_file), share, total))
+if missing:
+    print("      not reached:", " ".join(str(n) for n in missing[:60]))
 PY

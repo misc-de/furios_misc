@@ -1,14 +1,13 @@
-# furios_misc — Kleinigkeiten fuer das FuriPhone FLX1
+# furios_misc — small things for the FuriPhone FLX1
 
-Eine Sammelstelle. Was hier liegt, ist zu klein fuer ein eigenes Repo und zu
-nuetzlich, um es wegzuwerfen: einzelne Programme, die je eine Sache am
-Telefon in Ordnung bringen, ohne einen Bestandteil von FuriOS zu patchen
-oder zu ersetzen.
+A collection. What lives here is too small for a repository of its own and
+too useful to throw away: single programs that each put one thing right on
+the phone, without patching or replacing any part of FuriOS.
 
-Die groesseren Baustellen wohnen anderswo — [furios_pipewire][a] (Audio),
-[furios_modem_fixes][m] (Mobilfunk), [furios_gps][g] (Ortung),
-[furios_killswitch][k] (die drei Schalter am Gehaeuse) — und bedient werden
-sie alle aus derselben App, [furios_app][p].
+The larger building sites live elsewhere — [furios_pipewire][a] (audio),
+[furios_modem_fixes][m] (cellular), [furios_gps][g] (location),
+[furios_killswitch][k] (the three switches on the case) — and all of them are
+operated from the same app, [furios_app][p].
 
 [a]: https://github.com/misc-de/furios_pipewire
 [m]: https://github.com/misc-de/furios_modem_fixes
@@ -16,40 +15,39 @@ sie alle aus derselben App, [furios_app][p].
 [k]: https://github.com/misc-de/furios_killswitch
 [p]: https://github.com/misc-de/furios_app
 
-## Was drin ist
+## What is in here
 
 | | | |
 |---|---|---|
-| [battery](battery/) | `battctl` | Das Akkusymbol faerbt sich: die Huelle nach der Ladeleistung, die Fuellung nach dem Ladestand |
+| [battery](battery/) | `battctl` | The battery icon takes colour: the frame from the charging power, the filling from the charge level |
 
-Jedes Verzeichnis steht fuer sich: eigenes README, eigener `install.sh`,
-eigene Tests.
+Each directory stands on its own: its own README, its own `install.sh`, its
+own tests.
 
 ```
 git clone https://github.com/misc-de/furios_misc
 cd furios_misc/battery && ./install.sh
 ```
 
-## Hausordnung
+## House rules
 
-Damit die Sammlung eine Sammlung bleibt und kein Haufen:
+So that the collection stays a collection and does not become a heap:
 
-- **Ein Verzeichnis, eine Sache.** Mit `README.md` (was und warum),
-  `install.sh` und `tests/`. Was gemessen wurde und was dabei ueberrascht
-  hat, gehoert in ein `FINDINGS.md` daneben — das ist meistens der
-  eigentliche Wert.
-- **Nichts wird gepatcht.** Wer einen Bestandteil von FuriOS ersetzen muss,
-  ist hier falsch und gehoert in ein eigenes Repo mit einem Weg zurueck.
-- **SPDX-Kopf in jede Datei**, MIT (siehe LICENSE), und ein `NOTICE`, wo zur
-  Laufzeit fremder Code mitspielt.
-- **Ein Weg zurueck.** Was etwas veraendert, kann es auch zuruecknehmen —
-  `uninstall.sh`, oder ein Unterbefehl, der den Auslieferungszustand
-  wiederherstellt.
-- **Tests laufen auf dem Telefon**, ohne Display, ohne root, ohne
-  Fremdpakete. `./run-tests.sh` ruft die aller Unterprojekte auf.
+- **One directory, one thing.** With a `README.md` (what and why), an
+  `install.sh` and `tests/`. What was measured and what surprised us belongs
+  in a `FINDINGS.md` next to it — that is usually the real value.
+- **Nothing is patched.** Anybody who has to replace a part of FuriOS is in
+  the wrong place here and belongs in a repository of their own, with a way
+  back.
+- **An SPDX header in every file**, MIT (see LICENSE), and a `NOTICE`
+  wherever somebody else's code plays a part at runtime.
+- **A way back.** Whatever changes something can take it back again —
+  `uninstall.sh`, or a subcommand that restores the shipped state.
+- **Tests run on the phone**, without a display, without root, without
+  third-party packages. `./run-tests.sh` calls those of every subproject.
 
 ## Tests
 
 ```
-./run-tests.sh          # alle Unterprojekte - NIE mit sudo
+./run-tests.sh          # every subproject - NEVER with sudo
 ```

@@ -82,21 +82,21 @@ BUCKETS = ("green", "amber", "red")
 # rule without the palette leaves the level in it. Naming a white would be
 # guessing at a foreground we cannot read.
 RULE_COLOR = "  color: %s;\n"
-RULE_PALETTE = ("  -gtk-icon-palette: success %(farbe)s, warning %(farbe)s,"
-                " error %(farbe)s;\n")
+RULE_PALETTE = ("  -gtk-icon-palette: success %(colour)s, warning %(colour)s,"
+                " error %(colour)s;\n")
 RULE = "phosh-battery-info image {\n%s}\n"
 
 
 def css_rule(power=None, level=None, colors=None):
     """The stylesheet for one combination, or "" when there is nothing to
     say."""
-    farben = colors or COLORS
-    inhalt = ""
+    colours = colors or COLORS
+    body = ""
     if power:
-        inhalt += RULE_COLOR % farben[power]
+        body += RULE_COLOR % colours[power]
     if level:
-        inhalt += RULE_PALETTE % {"farbe": farben[level]}
-    return RULE % inhalt if inhalt else ""
+        body += RULE_PALETTE % {"colour": colours[level]}
+    return RULE % body if body else ""
 
 
 # Four characters of the rule, carried in the theme name.
@@ -208,13 +208,13 @@ def find_icon(name):
     """The file behind an icon name, or None."""
     if not name:
         return None
-    for wurzel in ICON_DIRS:
+    for root_dir in ICON_DIRS:
         for teil in ("symbolic/status", "scalable/status", "symbolic/legacy",
                      "scalable/legacy"):
             for theme in (ICON_THEME, "Adwaita", "hicolor", ""):
-                pfad = os.path.join(wurzel, theme, teil, name + ".svg")
-                if os.path.isfile(pfad):
-                    return pfad
+                path = os.path.join(root_dir, theme, teil, name + ".svg")
+                if os.path.isfile(path):
+                    return path
     return None
 
 
@@ -228,11 +228,11 @@ def phosh_icon(percent, charging):
     same way. Asking the wrong one was giving the wrong answer about
     whether the icon has two halves.
     """
-    stufe = 100 if percent is None else max(0, min(100, int(round(percent / 10.0)) * 10))
-    return "battery-level-%d-%ssymbolic" % (stufe, "charging-" if charging else "")
+    level_step = 100 if percent is None else max(0, min(100, int(round(percent / 10.0)) * 10))
+    return "battery-level-%d-%ssymbolic" % (level_step, "charging-" if charging else "")
 
 
-def split_icon_svg(quelle, level):
+def split_icon_svg(source, level):
     """The source SVG with a filling of its own laid over it.
 
     Adwaita draws the discharge battery as a single path: outline, cut-out
@@ -246,95 +246,95 @@ def split_icon_svg(quelle, level):
     class, or an empty battery with no filling to colour.
     """
     try:
-        with open(quelle) as fh:
+        with open(source) as fh:
             text = fh.read()
     except OSError:
         return None
     if "class=" in text or ICON_MARK in text:
         return None
-    hoehe = int(round(8 * level / 100.0))
-    if hoehe <= 0:
+    height = int(round(8 * level / 100.0))
+    if height <= 0:
         return None
-    rechteck = ('<path class="success" d="m 5 %d h 6 v %d h -6 z" '
-                'fill="#33d17a"/>' % (13 - hoehe, hoehe))
-    return text.replace("</svg>", ICON_MARK_FULL + "\n" + rechteck + "\n</svg>")
+    rect = ('<path class="success" d="m 5 %d h 6 v %d h -6 z" '
+                'fill="#33d17a"/>' % (13 - height, height))
+    return text.replace("</svg>", ICON_MARK_FULL + "\n" + rect + "\n</svg>")
 
 
-def icon_theme_dir(wurzel=None):
-    return os.path.join(wurzel or ICON_BASE, ICON_THEME)
+def icon_theme_dir(root_dir=None):
+    return os.path.join(root_dir or ICON_BASE, ICON_THEME)
 
 
-def icon_base_theme(wurzel=None):
+def icon_base_theme(root_dir=None):
     """The theme ours inherits from - the user's own, read back out of the
     index we wrote. That is where it is remembered, so a crash cannot lose
     it and a person can read it."""
-    pfad = os.path.join(icon_theme_dir(wurzel), "index.theme")
+    path = os.path.join(icon_theme_dir(root_dir), "index.theme")
     try:
-        with open(pfad) as fh:
-            for zeile in fh:
-                if zeile.startswith("Inherits="):
-                    return zeile.split("=", 1)[1].strip().split(",")[0]
+        with open(path) as fh:
+            for line in fh:
+                if line.startswith("Inherits="):
+                    return line.split("=", 1)[1].strip().split(",")[0]
     except OSError:
         pass
     return None
 
 
-def write_icon_theme(base="Adwaita", wurzel=None, quelle=None):
+def write_icon_theme(base="Adwaita", root_dir=None, source=None):
     """Write our icon theme: an index that inherits the user's own, and the
     discharge icons with a filling of their own. Returns the icon names."""
-    quelle = quelle or ICON_SOURCE
-    ordner = icon_theme_dir(wurzel)
-    ziel = os.path.join(ordner, "symbolic", "status")
-    geschrieben = []
+    source = source or ICON_SOURCE
+    folder = icon_theme_dir(root_dir)
+    target = os.path.join(folder, "symbolic", "status")
+    written = []
     for level in range(0, 101, 10):
         name = "battery-level-%d-symbolic.svg" % level
-        neu = split_icon_svg(os.path.join(quelle, name), level)
-        if neu is None:
+        new_text = split_icon_svg(os.path.join(source, name), level)
+        if new_text is None:
             continue
-        os.makedirs(ziel, exist_ok=True)
-        pfad = os.path.join(ziel, name)
+        os.makedirs(target, exist_ok=True)
+        path = os.path.join(target, name)
         try:
-            with open(pfad) as fh:
-                if fh.read() == neu:
-                    geschrieben.append(name)
+            with open(path) as fh:
+                if fh.read() == new_text:
+                    written.append(name)
                     continue
         except OSError:
             pass
-        with open(pfad, "w") as fh:
-            fh.write(neu)
-        geschrieben.append(name)
-    if not geschrieben:
+        with open(path, "w") as fh:
+            fh.write(new_text)
+        written.append(name)
+    if not written:
         return []
-    with open(os.path.join(ordner, "index.theme"), "w") as fh:
+    with open(os.path.join(folder, "index.theme"), "w") as fh:
         fh.write(INDEX_THEME % {"name": ICON_THEME, "inherits": base})
-    return geschrieben
+    return written
 
 
-def remove_icon_theme(wurzel=None):
+def remove_icon_theme(root_dir=None):
     """Take our icon theme off the disk. Returns how many files went.
 
     Only ours, and only if it is ours: a directory of that name without our
     marker in it was put there by somebody else and stays.
     """
-    ordner = icon_theme_dir(wurzel)
-    ziel = os.path.join(ordner, "symbolic", "status")
-    weg = 0
+    folder = icon_theme_dir(root_dir)
+    target = os.path.join(folder, "symbolic", "status")
+    gone = 0
     try:
-        eintraege = sorted(os.listdir(ziel))
+        entries = sorted(os.listdir(target))
     except OSError:
         return 0
-    for name in eintraege:
-        pfad = os.path.join(ziel, name)
+    for name in entries:
+        path = os.path.join(target, name)
         try:
-            with open(pfad) as fh:
+            with open(path) as fh:
                 if ICON_MARK not in fh.read():
                     continue
         except OSError:
             continue
-        os.unlink(pfad)
-        weg += 1
-    if weg:
-        for rest in (ziel, os.path.dirname(ziel), ordner):
+        os.unlink(path)
+        gone += 1
+    if gone:
+        for rest in (target, os.path.dirname(target), folder):
             try:
                 os.rmdir(rest)
             except OSError:
@@ -346,7 +346,7 @@ def remove_icon_theme(wurzel=None):
                         os.rmdir(rest)
                     except OSError:
                         pass
-    return weg
+    return gone
 
 
 def icon_is_split(name, charging=False):
@@ -358,10 +358,10 @@ def icon_is_split(name, charging=False):
     whole battery and the palette paints nothing. Measured, not assumed -
     the file is read and asked whether it has a class at all.
     """
-    pfad = find_icon(name)
-    if pfad:
+    path = find_icon(name)
+    if path:
         try:
-            with open(pfad) as fh:
+            with open(path) as fh:
                 return "class=" in fh.read()
         except OSError:
             pass
@@ -381,17 +381,17 @@ def upower_icon():
     """
     # One test seam, like the settings file: the tests must not depend on
     # what this phone's UPower happens to say while they run.
-    erzwungen = os.environ.get("FURIOS_BATTERY_ICON")
-    if erzwungen is not None:
-        return erzwungen or None
+    forced = os.environ.get("FURIOS_BATTERY_ICON")
+    if forced is not None:
+        return forced or None
     try:
-        aus = subprocess.run(["upower", "-i", UPOWER_DEV],
+        out = subprocess.run(["upower", "-i", UPOWER_DEV],
                              capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
         return None
-    for zeile in aus.stdout.splitlines():
-        if "icon-name" in zeile:
-            return zeile.split(":", 1)[1].strip().strip("'")
+    for line in out.stdout.splitlines():
+        if "icon-name" in line:
+            return line.split(":", 1)[1].strip().strip("'")
     return None
 
 
@@ -400,7 +400,7 @@ def icon_says_charging(name):
     return "-charging" in (name or "")
 
 
-def sources_agree(mess, icon=None):
+def sources_agree(reading, icon=None):
     """Do the kernel and UPower tell the same story?
 
     They do not always. On 15.9.2026 sysfs said "Charging" at 1.8 W while
@@ -412,9 +412,9 @@ def sources_agree(mess, icon=None):
     So when they disagree, the shell gets no colour at all. The filling
     still does - how full the battery is, both sources agree on.
     """
-    if mess is None or icon is None:
+    if reading is None or icon is None:
         return True
-    return icon_says_charging(icon) == bool(mess["charging"])
+    return icon_says_charging(icon) == bool(reading["charging"])
 
 
 def merge_colours(power, level):
@@ -443,9 +443,9 @@ def load_config(path=None):
     cfg = dict(DEFAULTS)
     try:
         with open(path or CONFIG) as fh:
-            gelesen = json.load(fh)
-        if isinstance(gelesen, dict):
-            for key, val in gelesen.items():
+            read_back = json.load(fh)
+        if isinstance(read_back, dict):
+            for key, val in read_back.items():
                 if key in DEFAULTS and isinstance(val, type(DEFAULTS[key])):
                     cfg[key] = val
                 elif (key in DEFAULTS and isinstance(DEFAULTS[key], float)
@@ -459,15 +459,15 @@ def load_config(path=None):
 
 
 def save_config(cfg, path=None):
-    ziel = path or CONFIG
-    os.makedirs(os.path.dirname(ziel), exist_ok=True)
+    target = path or CONFIG
+    os.makedirs(os.path.dirname(target), exist_ok=True)
     # Written beside the target and renamed: a phone that loses power halfway
     # through this should find the old file, not half of the new one.
-    tmp = ziel + ".neu"
+    tmp = target + ".new"
     with open(tmp, "w") as fh:
         json.dump({k: cfg[k] for k in sorted(cfg)}, fh, indent=2)
         fh.write("\n")
-    os.replace(tmp, ziel)
+    os.replace(tmp, target)
 
 
 # ------------------------------------------------------------------- Messung
@@ -489,25 +489,25 @@ def read_battery(base=None):
     MUCH, never which way.
     """
     status = _read("status", base)
-    strom = _read("current_now", base)
-    spannung = _read("voltage_now", base)
-    if status is None or strom is None or spannung is None:
+    current_ua = _read("current_now", base)
+    voltage_uv = _read("voltage_now", base)
+    if status is None or current_ua is None or voltage_uv is None:
         return None
     try:
-        ampere = abs(int(strom)) / 1e6
-        volt = int(spannung) / 1e6
+        ampere = abs(int(current_ua)) / 1e6
+        volt = int(voltage_uv) / 1e6
     except ValueError:
         return None
     try:
         # Missing or unreadable is None, not 0: a phone whose capacity
         # cannot be read must not have its icon painted "nearly empty".
-        prozent = float(_read("capacity", base))
+        percent = float(_read("capacity", base))
     except (TypeError, ValueError):
-        prozent = None
+        percent = None
     watt = ampere * volt
     return {
         "status": status,
-        "percent": prozent,
+        "percent": percent,
         "ampere": ampere,
         "volt": volt,
         "watt": watt,
@@ -520,8 +520,8 @@ def read_battery(base=None):
     }
 
 
-def median(werte):
-    s = sorted(werte)
+def median(values):
+    s = sorted(values)
     n = len(s)
     if not n:
         return None
@@ -537,30 +537,30 @@ def bucket_for(watt, charging, cfg, current=None):
     """
     h = cfg["hysteresis"]
     if charging:
-        gruen, gelb = cfg["charge_green_w"], cfg["charge_amber_w"]
+        green_at, amber_at = cfg["charge_green_w"], cfg["charge_amber_w"]
         if current == "green":
-            gruen *= 1 - h
+            green_at *= 1 - h
         elif current == "amber":
-            gruen *= 1 + h
-            gelb *= 1 - h
+            green_at *= 1 + h
+            amber_at *= 1 - h
         elif current == "red":
-            gelb *= 1 + h
-        if watt >= gruen:
+            amber_at *= 1 + h
+        if watt >= green_at:
             return "green"
-        return "amber" if watt >= gelb else "red"
+        return "amber" if watt >= amber_at else "red"
     # On battery: white until the drain is unusual, then amber, then red.
     # No green - the ordinary case is the one that should say nothing.
-    rot, gelb = cfg["drain_red_w"], cfg["drain_amber_w"]
+    red_at, amber_at = cfg["drain_red_w"], cfg["drain_amber_w"]
     if current == "red":
-        rot *= 1 - h
+        red_at *= 1 - h
     elif current == "amber":
-        rot *= 1 + h
-        gelb *= 1 - h
+        red_at *= 1 + h
+        amber_at *= 1 - h
     else:
-        gelb *= 1 + h
-    if watt >= rot:
+        amber_at *= 1 + h
+    if watt >= red_at:
         return "red"
-    return "amber" if watt >= gelb else None
+    return "amber" if watt >= amber_at else None
 
 
 def level_for(percent, cfg, current=None):
@@ -572,36 +572,36 @@ def level_for(percent, cfg, current=None):
     if percent is None or not cfg["level"]:
         return None
     h = cfg["level_hysteresis_pct"]
-    gelb, rot = cfg["level_amber_pct"], cfg["level_red_pct"]
+    amber_at, red_at = cfg["level_amber_pct"], cfg["level_red_pct"]
     # Leaving a colour costs the two points that entering it did not, so a
     # percentage stepping across 60 and back does not restyle twice.
     if current == "red":
-        rot += h
+        red_at += h
     elif current == "amber":
-        gelb += h
-        rot -= h
-    if percent < rot:
+        amber_at += h
+        red_at -= h
+    if percent < red_at:
         return "red"
-    return "amber" if percent < gelb else None
+    return "amber" if percent < amber_at else None
 
 
-def wanted_level(mess, cfg, current=None):
-    if mess is None:
+def wanted_level(reading, cfg, current=None):
+    if reading is None:
         return None
-    return level_for(mess.get("percent"), cfg, current)
+    return level_for(reading.get("percent"), cfg, current)
 
 
-def wanted_bucket(mess, cfg, current=None, icon=None):
+def wanted_bucket(reading, cfg, current=None, icon=None):
     """The colour of the shell, or None for "leave it alone"."""
-    if mess is None or not mess["plausible"] or not mess["moving"]:
+    if reading is None or not reading["plausible"] or not reading["moving"]:
         return None
-    if not sources_agree(mess, icon):
+    if not sources_agree(reading, icon):
         return None
-    if mess["charging"] and not cfg["charging"]:
+    if reading["charging"] and not cfg["charging"]:
         return None
-    if not mess["charging"] and not cfg["discharging"]:
+    if not reading["charging"] and not cfg["discharging"]:
         return None
-    return bucket_for(mess["watt"], mess["charging"], cfg, current)
+    return bucket_for(reading["watt"], reading["charging"], cfg, current)
 
 
 # -------------------------------------------------------------------- Themes
@@ -618,7 +618,7 @@ def colours_of(name):
     treffer = MARK.match(name or "")
     if not treffer:
         return ("", "")
-    weiche = lambda wert: None if wert in (None, "none") else wert  # noqa: E731
+    weiche = lambda value: None if value in (None, "none") else value  # noqa: E731
     return (weiche(treffer.group("power")), weiche(treffer.group("level")))
 
 
@@ -635,12 +635,12 @@ def base_css(base):
     the light stylesheet - the colour would work and the whole phone would
     change appearance.
     """
-    for ordner in THEME_DIRS:
-        gtk3 = os.path.join(ordner, base, "gtk-3.0")
-        hell = os.path.join(gtk3, "gtk.css")
-        if os.path.isfile(hell):
-            dunkel = os.path.join(gtk3, "gtk-dark.css")
-            return hell, (dunkel if os.path.isfile(dunkel) else None)
+    for folder in THEME_DIRS:
+        gtk3 = os.path.join(folder, base, "gtk-3.0")
+        light = os.path.join(gtk3, "gtk.css")
+        if os.path.isfile(light):
+            dark = os.path.join(gtk3, "gtk-dark.css")
+            return light, (dark if os.path.isfile(dark) else None)
     # Adwaita and HighContrast have no files: GTK3 carries them as resources.
     # Anything else with no stylesheet on disk is a theme we cannot build on,
     # and the caller says so rather than writing a theme that renders the
@@ -652,19 +652,19 @@ def base_css(base):
                          "gtk-contained-inverse.css"),
     }
     if base in eingebaut:
-        ordner, hell, dunkel = eingebaut[base]
-        pfad = "resource:///org/gtk/libgtk/theme/" + ordner + "/"
-        return pfad + hell, (pfad + dunkel if dunkel else None)
+        folder, light, dark = eingebaut[base]
+        path = "resource:///org/gtk/libgtk/theme/" + folder + "/"
+        return path + light, (path + dark if dark else None)
     return None, None
 
 
-def _import(ziel):
+def _import(target):
     # An @import keeps the original file the original file: everything it
     # loads by relative path - assets, the libadwaita part, the lot - still
     # resolves against where IT lives, not where our copy does.
-    if ziel.startswith("resource:"):
-        return '@import url("%s");\n' % ziel
-    return '@import url("file://%s");\n' % ziel
+    if target.startswith("resource:"):
+        return '@import url("%s");\n' % target
+    return '@import url("file://%s");\n' % target
 
 
 def write_theme(base, power=None, level=None, themes_dir=None, colors=None):
@@ -678,24 +678,24 @@ def write_theme(base, power=None, level=None, themes_dir=None, colors=None):
     have been updated by a package - a stale copy of its name with a fresh
     stylesheet underneath is the kind of difference nobody would look for.
     """
-    regel = css_rule(power, level, colors)
-    if not regel:
+    rule = css_rule(power, level, colors)
+    if not rule:
         return None                       # nothing to say - that is the base
-    hell, dunkel = base_css(base)
-    if hell is None:
+    light, dark = base_css(base)
+    if light is None:
         return None
-    wurzel = themes_dir or THEMES
+    root_dir = themes_dir or THEMES
     name = theme_name(base, power, level)
-    gtk3 = os.path.join(wurzel, name, "gtk-3.0")
+    gtk3 = os.path.join(root_dir, name, "gtk-3.0")
     os.makedirs(gtk3, exist_ok=True)
-    kopf = ("/* Written by battctl (furios_misc). Deleted by "
+    header = ("/* Written by battctl (furios_misc). Deleted by "
             "`battctl restore`. */\n")
     with open(os.path.join(gtk3, "gtk.css"), "w") as fh:
-        fh.write(_import(hell) + kopf + regel)
+        fh.write(_import(light) + header + rule)
     dunkelziel = os.path.join(gtk3, "gtk-dark.css")
-    if dunkel:
+    if dark:
         with open(dunkelziel, "w") as fh:
-            fh.write(_import(dunkel) + kopf + regel)
+            fh.write(_import(dark) + header + rule)
     elif os.path.exists(dunkelziel):
         # The base theme lost its dark sheet between two runs.
         os.unlink(dunkelziel)
@@ -714,56 +714,56 @@ def can_theme(base):
 
 def stale_themes(themes_dir=None):
     """Our themes from an older rule. Returns the names."""
-    wurzel = themes_dir or THEMES
+    root_dir = themes_dir or THEMES
     try:
-        eintraege = sorted(os.listdir(wurzel))
+        entries = sorted(os.listdir(root_dir))
     except OSError:
         return []
-    alt = []
-    for name in eintraege:
+    old_paths = []
+    for name in entries:
         if base_name(name) == name:
             continue                      # not one of ours
         if ("-batt%s-" % TOKEN) in name:
             continue                      # this generation
-        alt.append(name)
-    return alt
+        old_paths.append(name)
+    return old_paths
 
 
-def remove_themes(themes_dir=None, nur=None):
+def remove_themes(themes_dir=None, only=None):
     """Take our themes off the disk. Returns how many went.
 
-    `nur` is a list of names - used to clear out what an older version of
+    `only` is a list of names - used to clear out what an older version of
     the rule left behind without touching this generation, so a phone does
     not collect directories per upgrade.
     """
-    wurzel = themes_dir or THEMES
-    weg = 0
+    root_dir = themes_dir or THEMES
+    gone = 0
     try:
-        eintraege = sorted(os.listdir(wurzel))
+        entries = sorted(os.listdir(root_dir))
     except OSError:
         return 0
-    for name in eintraege:
-        if nur is not None and name not in nur:
+    for name in entries:
+        if only is not None and name not in only:
             continue
         if base_name(name) == name:
             continue                      # not one of ours
-        pfad = os.path.join(wurzel, name)
-        marker = os.path.join(pfad, "gtk-3.0", "gtk.css")
+        path = os.path.join(root_dir, name)
+        marker = os.path.join(path, "gtk-3.0", "gtk.css")
         try:
             with open(marker) as fh:
                 if "battctl" not in fh.read(200):
                     continue              # same name, somebody else's file
         except OSError:
             continue
-        for ordner, _, dateien in os.walk(pfad, topdown=False):
-            for datei in dateien:
-                os.unlink(os.path.join(ordner, datei))
-            os.rmdir(ordner)
-        weg += 1
-    return weg
+        for folder, _, files in os.walk(path, topdown=False):
+            for file_ in files:
+                os.unlink(os.path.join(folder, file_))
+            os.rmdir(folder)
+        gone += 1
+    return gone
 
 
-# ------------------------------------------------------- die Einstellung selbst
+# ----------------------------------------------------------- the setting itself
 
 class Setting:
     """The gtk-theme key, through `gsettings`.
@@ -774,38 +774,38 @@ class Setting:
     changes are rare by design.
     """
 
-    def __init__(self, datei=None, schluessel=SETTING, umgebung=None):
+    def __init__(self, file_=None, schluessel=SETTING, umgebung=None):
         # Tests point this at a file instead of dconf. Nothing else does.
         self.schluessel = schluessel
-        self.datei = datei or os.environ.get(
+        self.file_ = file_ or os.environ.get(
             umgebung or "FURIOS_BATTERY_SETTING_FILE")
 
     def get(self):
-        if self.datei:
+        if self.file_:
             try:
-                with open(self.datei) as fh:
+                with open(self.file_) as fh:
                     return fh.read().strip()
             except OSError:
                 return ""
         try:
-            aus = subprocess.run(["gsettings", "get"] + self.schluessel.split(),
+            out = subprocess.run(["gsettings", "get"] + self.schluessel.split(),
                                  capture_output=True, text=True, timeout=10)
         except (OSError, subprocess.SubprocessError):
             return ""
-        return aus.stdout.strip().strip("'")
+        return out.stdout.strip().strip("'")
 
     def set(self, name):
-        if self.datei:
-            with open(self.datei, "w") as fh:
+        if self.file_:
+            with open(self.file_, "w") as fh:
                 fh.write(name + "\n")
             return True
         try:
-            aus = subprocess.run(["gsettings", "set"]
+            out = subprocess.run(["gsettings", "set"]
                                  + self.schluessel.split() + [name],
                                  capture_output=True, text=True, timeout=10)
         except (OSError, subprocess.SubprocessError):
             return False
-        return aus.returncode == 0
+        return out.returncode == 0
 
 
 def icon_setting():
@@ -814,23 +814,23 @@ def icon_setting():
                    umgebung="FURIOS_BATTERY_ICON_SETTING_FILE")
 
 
-def use_icon_theme(setting=None, wurzel=None, quelle=None):
+def use_icon_theme(setting=None, root_dir=None, source=None):
     """Write our icon theme and switch to it. Returns True if it is in use.
 
     The switch is what makes GTK re-read: it caches lookups and does not
     notice a file appearing under a theme it is already using.
     """
     setting = setting or icon_setting()
-    jetzt = setting.get()
-    basis = icon_base_theme(wurzel) if jetzt == ICON_THEME else jetzt
-    if not write_icon_theme(basis or "Adwaita", wurzel, quelle):
+    current = setting.get()
+    base = icon_base_theme(root_dir) if current == ICON_THEME else current
+    if not write_icon_theme(base or "Adwaita", root_dir, source):
         return False
-    if jetzt != ICON_THEME:
+    if current != ICON_THEME:
         return setting.set(ICON_THEME)
     return True
 
 
-def drop_icon_theme(setting=None, wurzel=None):
+def drop_icon_theme(setting=None, root_dir=None):
     """Back to the user's own icon theme, then take ours away.
 
     In that order, and not the other way round: a theme whose files vanish
@@ -838,90 +838,90 @@ def drop_icon_theme(setting=None, wurzel=None):
     the bar with no way back short of restarting phosh.
     """
     setting = setting or icon_setting()
-    basis = icon_base_theme(wurzel) or "Adwaita"
+    base = icon_base_theme(root_dir) or "Adwaita"
     if setting.get() == ICON_THEME:
-        setting.set(basis)
-    return remove_icon_theme(wurzel)
+        setting.set(base)
+    return remove_icon_theme(root_dir)
 
 
-# -------------------------------------------------------------------- Zustand
+# ---------------------------------------------------------------------- state
 
 def describe(cfg=None, setting=None, base=None):
     """Everything both front ends show, in one dict."""
     cfg = cfg or load_config()
     setting = setting or Setting()
-    mess = read_battery()
-    jetzt = setting.get()
-    basis = base or base_name(jetzt)
-    zeigt, zeigt_stand = colours_of(jetzt)
-    stand = wanted_level(mess, cfg, zeigt_stand)
+    reading = read_battery()
+    current = setting.get()
+    base = base or base_name(current)
+    zeigt, zeigt_stand = colours_of(current)
+    stand = wanted_level(reading, cfg, zeigt_stand)
     # Two names: the one UPower publishes, which is what the direction
     # comes from, and the one phosh actually draws, which is the file that
     # decides whether there are two halves.
-    gemeldet = upower_icon()
-    einig = sources_agree(mess, gemeldet)
-    symbol = phosh_icon((mess or {}).get("percent"),
-                        (mess or {}).get("charging"))
-    bucket = wanted_bucket(mess, cfg, zeigt, symbol)
-    geteilt = icon_is_split(symbol, (mess or {}).get("charging"))
-    del gemeldet
-    if not geteilt:
+    reported = upower_icon()
+    agree = sources_agree(reading, reported)
+    icon = phosh_icon((reading or {}).get("percent"),
+                        (reading or {}).get("charging"))
+    bucket = wanted_bucket(reading, cfg, zeigt, icon)
+    split = icon_is_split(icon, (reading or {}).get("charging"))
+    del reported
+    if not split:
         bucket = stand = merge_colours(bucket, stand)
-    hell, _ = base_css(basis)
+    light, _ = base_css(base)
     return {
-        "state": (mess or {}).get("status", "unknown"),
-        "watt": round((mess or {}).get("watt", 0.0), 2),
-        "ampere": round((mess or {}).get("ampere", 0.0), 3),
-        "volt": round((mess or {}).get("volt", 0.0), 3),
-        "percent": (mess or {}).get("percent"),
-        "readable": mess is not None,
-        "plausible": (mess or {}).get("plausible", False),
+        "state": (reading or {}).get("status", "unknown"),
+        "watt": round((reading or {}).get("watt", 0.0), 2),
+        "ampere": round((reading or {}).get("ampere", 0.0), 3),
+        "volt": round((reading or {}).get("volt", 0.0), 3),
+        "percent": (reading or {}).get("percent"),
+        "readable": reading is not None,
+        "plausible": (reading or {}).get("plausible", False),
         "bucket": bucket or "none",
         "showing": zeigt or "none",
         # The filling, which says something else: how full, not how fast.
         "level_bucket": stand or "none",
         "level_showing": zeigt_stand or "none",
         # Whether this icon has two halves to colour at all.
-        "icon": symbol or "?",
-        "split_icon": geteilt,
+        "icon": icon or "?",
+        "split_icon": split,
         # False while the kernel and UPower disagree about the direction.
-        "sources_agree": einig,
-        "theme": jetzt,
-        "base_theme": basis,
+        "sources_agree": agree,
+        "theme": current,
+        "base_theme": base,
         # A theme we cannot build on is the one failure that leaves everything
         # else looking healthy, so it is stated rather than implied.
-        "can_theme": hell is not None,
+        "can_theme": light is not None,
         "config": cfg,
     }
 
 
 def cmd_status(argv):
-    zustand = describe()
+    state = describe()
     if "--json" in argv:
-        print(json.dumps(zustand, indent=2, sort_keys=True))
-        return 0 if zustand["readable"] else 1
-    cfg = zustand["config"]
-    print("state:        %s" % zustand["state"])
-    if zustand["readable"]:
+        print(json.dumps(state, indent=2, sort_keys=True))
+        return 0 if state["readable"] else 1
+    cfg = state["config"]
+    print("state:        %s" % state["state"])
+    if state["readable"]:
         print("power:        %.2f W (%.3f A at %.3f V)"
-              % (zustand["watt"], zustand["ampere"], zustand["volt"]))
+              % (state["watt"], state["ampere"], state["volt"]))
     else:
         print("power:        not readable (%s)" % SYSFS)
     print("shell:        %s (would be %s)"
-          % (zustand["showing"], zustand["bucket"]))
+          % (state["showing"], state["bucket"]))
     print("filling:      %s (would be %s) at %s %%"
-          % (zustand["level_showing"], zustand["level_bucket"],
-             "?" if zustand["percent"] is None else int(zustand["percent"])))
-    print("icon:         %s%s" % (zustand["icon"],
-          "" if zustand["split_icon"]
+          % (state["level_showing"], state["level_bucket"],
+             "?" if state["percent"] is None else int(state["percent"])))
+    print("icon:         %s%s" % (state["icon"],
+          "" if state["split_icon"]
           else " - one shape, so both halves take the same colour"))
-    if not zustand["sources_agree"]:
+    if not state["sources_agree"]:
         print("             ! the kernel says %s and UPower draws the other "
               "one - no colour for the shell until they agree"
-              % zustand["state"].lower())
-    print("base theme:   %s" % zustand["base_theme"])
-    print("theme now:    %s" % zustand["theme"])
-    if not zustand["can_theme"]:
+              % state["state"].lower())
+    print("base theme:   %s" % state["base_theme"])
+    print("theme now:    %s" % state["theme"])
+    if not state["can_theme"]:
         print("             ! no GTK3 stylesheet found for that theme - "
               "nothing can be coloured")
     print("charging:     %s (green from %.1f W, amber from %.1f W)"
@@ -934,7 +934,7 @@ def cmd_status(argv):
     print("filling:      %s (plain above %d %%, amber below, red below %d %%)"
           % ("on" if cfg["level"] else "off",
              int(cfg["level_amber_pct"]), int(cfg["level_red_pct"])))
-    return 0 if zustand["readable"] else 1
+    return 0 if state["readable"] else 1
 
 
 # Which config keys `battctl config` will take, and how to read the value.
@@ -953,16 +953,16 @@ def cmd_config(argv):
     if len(argv) != 2:
         print("Usage: battctl config <key> <value>", file=sys.stderr)
         return 2
-    key, wert = argv
+    key, value = argv
     key = key.replace("-", "_")
     if key in SCHALTER:
-        if wert not in ("on", "off"):
+        if value not in ("on", "off"):
             print("%s takes on or off." % key, file=sys.stderr)
             return 2
-        cfg[key] = wert == "on"
+        cfg[key] = value == "on"
     elif key in ZAHLEN:
         try:
-            zahl = float(wert)
+            zahl = float(value)
         except ValueError:
             print("%s takes a number." % key, file=sys.stderr)
             return 2
@@ -993,11 +993,11 @@ def cmd_config(argv):
 def cmd_reset(_argv):
     """Put the user's own theme back. Idempotent, and safe to call twice."""
     setting = Setting()
-    jetzt = setting.get()
-    basis = base_name(jetzt)
-    if jetzt == basis:
+    current = setting.get()
+    base = base_name(current)
+    if current == base:
         return 0
-    return 0 if setting.set(basis) else 1
+    return 0 if setting.set(base) else 1
 
 
 def cmd_restore(_argv):
@@ -1009,14 +1009,14 @@ def cmd_restore(_argv):
     writes them again, which is why the app stops the service first.
     """
     cmd_reset([])
-    weg = remove_themes()
-    symbole = drop_icon_theme()
+    gone = remove_themes()
+    icons = drop_icon_theme()
     try:
         os.unlink(CONFIG)
     except OSError:
         pass
     print("Own theme restored, %d colour theme(s) and %d icon copies removed."
-          % (weg, symbole))
+          % (gone, icons))
     return 0
 
 
@@ -1025,14 +1025,14 @@ def cmd_restore(_argv):
 class Daemon:
     """The loop: read, smooth, decide, and only then touch the setting."""
 
-    def __init__(self, cfg=None, setting=None, jetzt=None):
+    def __init__(self, cfg=None, setting=None, current=None):
         self.cfg = cfg or load_config()
         self.setting = setting or Setting()
-        self.samples = []                 # (Zeitpunkt, Watt, laedt)
-        # (Huelle, Fuellung) - die Namen der Farben, nicht des Themes
+        self.samples = []                 # (Zeitpunkt, Watt, charging_)
+        # (shell, filling) - the names of the colours, not of the theme
         self.showing = (None, None)
         self.last_change = 0.0
-        self.last_good = 0.0              # wann zuletzt etwas Brauchbares kam
+        self.last_good = 0.0              # wann zuletzt something Brauchbares kam
         self.cfg_stamp = self._stamp()
         # The icon name UPower publishes, kept up to date by whoever drives
         # the loop. Used for ONE thing: telling whether UPower and the
@@ -1040,15 +1040,15 @@ class Daemon:
         # different question, and phosh_icon() answers it - phosh builds
         # its own name and the two are not the same.
         self.icon = None
-        self.base = base_name(jetzt if jetzt is not None else self.setting.get())
+        self.base = base_name(current if current is not None else self.setting.get())
 
     @staticmethod
-    def _stamp(pfad=None):
+    def _stamp(path=None):
         try:
-            zustand = os.stat(pfad or CONFIG)
+            state = os.stat(path or CONFIG)
         except OSError:
             return None
-        return (zustand.st_mtime_ns, zustand.st_size)
+        return (state.st_mtime_ns, state.st_size)
 
     def reload(self):
         """Take a changed config without being restarted.
@@ -1058,10 +1058,10 @@ class Daemon:
         until the next boot - the setting would be saved, and nothing would
         happen. Checked by timestamp, so the ordinary tick costs one stat().
         """
-        stempel = self._stamp()
-        if stempel == self.cfg_stamp:
+        stamp = self._stamp()
+        if stamp == self.cfg_stamp:
             return False
-        self.cfg_stamp = stempel
+        self.cfg_stamp = stamp
         self.cfg = load_config()
         return True
 
@@ -1082,22 +1082,22 @@ class Daemon:
         self.showing = (None, None)
         return True
 
-    def sample(self, now=None, mess=None):
+    def sample(self, now=None, reading=None):
         now = time.time() if now is None else now
-        mess = read_battery() if mess is None else mess
-        if mess is None or not mess["plausible"]:
+        reading = read_battery() if reading is None else reading
+        if reading is None or not reading["plausible"]:
             return None
-        self.samples.append((now, mess["watt"], mess["charging"]))
+        self.samples.append((now, reading["watt"], reading["charging"]))
         grenze = now - self.cfg["window_s"]
         self.samples = [s for s in self.samples if s[0] >= grenze]
-        return mess
+        return reading
 
-    def decide(self, mess, now=None):
+    def decide(self, reading, now=None):
         """The colour to show, from the median of the window - not from the
         last reading. current_now swings by a quarter of an amp between two
         reads of the same steady charge."""
         now = time.time() if now is None else now
-        if mess is None or not mess["moving"]:
+        if reading is None or not reading["moving"]:
             return None
         # A direction that keeps changing is not a direction. With a worn
         # USB port the phone flips between charging and discharging every
@@ -1107,11 +1107,11 @@ class Daemon:
         # shell says nothing until a whole window agrees.
         if len({c for (_, _, c) in self.samples}) > 1:
             return None
-        gleich = [w for (_, w, c) in self.samples if c == mess["charging"]]
-        mitte = median(gleich) if gleich else mess["watt"]
-        glatt = dict(mess)
-        glatt["watt"] = mitte
-        return wanted_bucket(glatt, self.cfg, self.showing[0], self.icon)
+        same_way = [w for (_, w, c) in self.samples if c == reading["charging"]]
+        middle = median(same_way) if same_way else reading["watt"]
+        smoothed = dict(reading)
+        smoothed["watt"] = middle
+        return wanted_bucket(smoothed, self.cfg, self.showing[0], self.icon)
 
     def apply(self, paar, now=None):
         """Set the theme for (shell colour, filling colour).
@@ -1128,32 +1128,32 @@ class Daemon:
                 and now - self.last_change < self.cfg["dwell_s"]):
             return False
         if paar == (None, None):
-            ziel = self.base
+            target = self.base
         else:
-            ziel = self.ensure_theme(*paar)
-            if ziel is None:
+            target = self.ensure_theme(*paar)
+            if target is None:
                 return False
-        if not self.setting.set(ziel):
+        if not self.setting.set(target):
             return False
         self.showing = paar
         self.last_change = now
         return True
 
-    def tick(self, now=None, mess=None):
+    def tick(self, now=None, reading=None):
         now = time.time() if now is None else now
         self.reload()
-        jetzt = self.setting.get()
-        if jetzt and self.adopt(jetzt):
+        current = self.setting.get()
+        if current and self.adopt(current):
             pass
-        elif jetzt and base_name(jetzt) == self.base:
+        elif current and base_name(current) == self.base:
             # Someone (a crash of ours, a second instance) left a colour on
             # that we are not tracking. Adopt it so hysteresis and dwell start
             # from what is on screen.
-            zeigt = colours_of(jetzt)
+            zeigt = colours_of(current)
             if zeigt != ("", "") and self.showing == (None, None):
                 self.showing = zeigt
-        gemessen = self.sample(now, mess)
-        if gemessen is None:
+        measured = self.sample(now, reading)
+        if measured is None:
             # Nothing readable this time. One failed read is not a reason to
             # restyle every app on the phone, so the colour stays - but not
             # for ever: a colour nothing can justify any more is worse than
@@ -1164,15 +1164,15 @@ class Daemon:
                 return self.apply((None, None), now)
             return False
         self.last_good = now
-        huelle = self.decide(gemessen, now)
-        fuellung = wanted_level(gemessen, self.cfg, self.showing[1])
-        gezeichnet = phosh_icon(gemessen.get("percent"), gemessen["charging"])
-        if not icon_is_split(gezeichnet, gemessen["charging"]):
+        shell = self.decide(measured, now)
+        filling = wanted_level(measured, self.cfg, self.showing[1])
+        drawn = phosh_icon(measured.get("percent"), measured["charging"])
+        if not icon_is_split(drawn, measured["charging"]):
             # One shape, one colour. Saying both would mean the filling
             # silently overwriting the shell, or the other way round -
             # instead the more urgent of the two speaks for the whole icon.
-            huelle = fuellung = merge_colours(huelle, fuellung)
-        return self.apply((huelle, fuellung), now)
+            shell = filling = merge_colours(shell, filling)
+        return self.apply((shell, filling), now)
 
 
 def cmd_daemon(_argv):
@@ -1191,7 +1191,7 @@ def cmd_daemon(_argv):
 
         def __init__(self):
             super().__init__()
-            self.datei = None
+            self.file_ = None
             schema, schluessel = SETTING.split()
             self.gio = Gio.Settings.new(schema)
             self.schluessel = schluessel
@@ -1210,9 +1210,9 @@ def cmd_daemon(_argv):
     daemon = Daemon(setting=GioSetting())
     # Leftovers from an older rule, before anything new is written: the
     # names differ, so nothing in use is touched.
-    veraltet = stale_themes()
-    if veraltet:
-        remove_themes(nur=veraltet)
+    stale = stale_themes()
+    if stale:
+        remove_themes(only=stale)
     # Our copies of the discharge icons, so the filling can be coloured on
     # battery too. Identical to Adwaita's until something sets the palette,
     # and only in this user's icon directory.
@@ -1229,10 +1229,10 @@ def cmd_daemon(_argv):
         return 1
     print("colouring the battery icon on top of %s" % daemon.base, flush=True)
 
-    schleife = GLib.MainLoop()
+    loop_ = GLib.MainLoop()
     proxy = None
 
-    def aufwachen(*_):
+    def wake_up(*_):
         try:
             if proxy is not None:
                 # Cached, so this costs nothing: the property arrives with
@@ -1244,16 +1244,16 @@ def cmd_daemon(_argv):
                       % (daemon.showing[0] or "plain",
                          daemon.showing[1] or "plain",
                          daemon.setting.get()), flush=True)
-        except Exception as fehler:                  # noqa: BLE001
+        except Exception as error:                  # noqa: BLE001
             # A cosmetic daemon must not die of a surprise in one reading.
-            print("tick failed: %r" % (fehler,), file=sys.stderr, flush=True)
+            print("tick failed: %r" % (error,), file=sys.stderr, flush=True)
         return True
 
-    def beenden(*_):
+    def shutdown(*_):
         # The theme goes back before we do. A green icon left behind on a
         # phone whose daemon is gone would be a lie that outlives it.
         daemon.apply((None, None), now=time.time() + daemon.cfg["dwell_s"])
-        schleife.quit()
+        loop_.quit()
         return True
 
     # UPower is the clock. It already polls the battery for every other
@@ -1273,16 +1273,16 @@ def cmd_daemon(_argv):
             "org.freedesktop.UPower",
             "/org/freedesktop/UPower/devices/battery_battery",
             "org.freedesktop.UPower.Device", None)
-        proxy.connect("g-properties-changed", aufwachen)
-    except GLib.Error as fehler:
+        proxy.connect("g-properties-changed", wake_up)
+    except GLib.Error as error:
         print("no UPower to listen to (%s) - falling back to the timer alone"
-              % fehler.message, file=sys.stderr, flush=True)
+              % error.message, file=sys.stderr, flush=True)
         proxy = None
 
     # The safety net, and the whole answer when there is no UPower: a slow
     # timer. It also covers the case the comment above warns about - if the
-    # subscription ever dies, the colour keeps following, just later.
-    GLib.timeout_add_seconds(120, aufwachen)
+    # subscription ever this_, the colour keeps following, just later.
+    GLib.timeout_add_seconds(120, wake_up)
     # GLibUnix where it exists, GLib where it does not: pygobject moved
     # unix_signal_add and warns twice into the journal on every start
     # otherwise - two lines that would be in every log for ever, saying
@@ -1293,11 +1293,11 @@ def cmd_daemon(_argv):
         signal_add = GLibUnix.signal_add
     except (ValueError, ImportError):
         signal_add = GLib.unix_signal_add
-    signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, beenden)
-    signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, beenden)
+    signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, shutdown)
+    signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, shutdown)
 
-    aufwachen()
-    schleife.run()
+    wake_up()
+    loop_.run()
     # Referenced after the loop so nothing can decide the proxy was unused.
     del proxy
     return 0
@@ -1307,14 +1307,14 @@ def now_iso():
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 
 
-def quantil(werte, anteil):
-    if not werte:
+def quantil(values, fraction):
+    if not values:
         return None
-    s = sorted(werte)
+    s = sorted(values)
     # Round half UP, not round(): Python rounds 4.5 to 4, and a quantile
     # that quietly picks the lower neighbour at every .5 is a surprise in a
     # number somebody sets a threshold from.
-    i = min(len(s) - 1, max(0, int(anteil * (len(s) - 1) + 0.5)))
+    i = min(len(s) - 1, max(0, int(fraction * (len(s) - 1) + 0.5)))
     return s[i]
 
 
@@ -1327,98 +1327,98 @@ def cmd_watch(argv):
     normal while in use, not the 0.2 W of a phone lying on a table. The rows
     carry that state so the two can be told apart afterwards.
     """
-    sekunden, abstand, ziel = 3600.0, 5.0, None
+    seconds, gap, target = 3600.0, 5.0, None
     rest = list(argv)
     while rest:
         wort = rest.pop(0)
         if wort in ("--csv", "-o") and rest:
-            ziel = rest.pop(0)
+            target = rest.pop(0)
         elif wort in ("--interval", "-i") and rest:
-            abstand = float(rest.pop(0))
+            gap = float(rest.pop(0))
         else:
             try:
-                sekunden = float(wort)
+                seconds = float(wort)
             except ValueError:
                 print("Usage: battctl watch [seconds] [--interval s] "
                       "[--csv file]", file=sys.stderr)
                 return 2
 
-    aus = open(ziel, "a") if ziel else None
-    kopf = "time,state,watt,percent,screen"
-    print(kopf, flush=True)
-    if aus and aus.tell() == 0:
-        aus.write(kopf + "\n")
+    out = open(target, "a") if target else None
+    header = "time,state,watt,percent,screen"
+    print(header, flush=True)
+    if out and out.tell() == 0:
+        out.write(header + "\n")
 
-    proben = {"Charging": [], "Discharging": []}
-    richtungen = []
-    ende = time.time() + sekunden
+    samples = {"Charging": [], "Discharging": []}
+    directions = []
+    end_ = time.time() + seconds
     try:
-        while time.time() < ende:
-            mess = read_battery()
-            if mess and mess["plausible"]:
-                zeile = "%s,%s,%.3f,%s,%s" % (
-                    now_iso(), mess["status"],
-                    mess["watt"], _read("capacity") or "?", _screen_on())
-                print(zeile, flush=True)
-                if aus:
-                    aus.write(zeile + "\n")
-                    aus.flush()
-                proben.setdefault(mess["status"], []).append(mess["watt"])
-                richtungen.append((now_iso(), mess["status"]))
-            time.sleep(abstand)
+        while time.time() < end_:
+            reading = read_battery()
+            if reading and reading["plausible"]:
+                line = "%s,%s,%.3f,%s,%s" % (
+                    now_iso(), reading["status"],
+                    reading["watt"], _read("capacity") or "?", _screen_on())
+                print(line, flush=True)
+                if out:
+                    out.write(line + "\n")
+                    out.flush()
+                samples.setdefault(reading["status"], []).append(reading["watt"])
+                directions.append((now_iso(), reading["status"]))
+            time.sleep(gap)
     except KeyboardInterrupt:
         print()
     finally:
-        if aus:
-            aus.close()
+        if out:
+            out.close()
 
     # How often the direction changed during the run. A worn USB port
     # turns the charging half of a measurement into noise, and a calibration
     # run should say so rather than hand over a median of it.
-    wechsel = 0
-    vorher = None
-    for zeitpunkt, zustand in richtungen:
-        if vorher is not None and zustand != vorher:
-            wechsel += 1
-        vorher = zustand
-    if wechsel:
+    changes = 0
+    before = None
+    for when, state in directions:
+        if before is not None and state != before:
+            changes += 1
+        before = state
+    if changes:
         print("\ndirection changed %d times during the run - a charging "
-              "figure from this is not a baseline" % wechsel)
+              "figure from this is not a baseline" % changes)
 
-    for zustand in ("Discharging", "Charging"):
-        werte = proben.get(zustand) or []
-        if not werte:
+    for state in ("Discharging", "Charging"):
+        values = samples.get(state) or []
+        if not values:
             continue
-        print("\n%s: %d readings" % (zustand, len(werte)))
-        for name, anteil in (("median", 0.5), ("p90", 0.9), ("p98", 0.98)):
-            print("  %-7s %5.2f W" % (name, quantil(werte, anteil)))
-        print("  %-7s %5.2f W" % ("max", max(werte)))
-        if zustand == "Discharging":
+        print("\n%s: %d readings" % (state, len(values)))
+        for name, fraction in (("median", 0.5), ("p90", 0.9), ("p98", 0.98)):
+            print("  %-7s %5.2f W" % (name, quantil(values, fraction)))
+        print("  %-7s %5.2f W" % ("max", max(values)))
+        if state == "Discharging":
             print("  A starting point: amber at p90, red at p98 - so that "
                   "the ordinary tenth speaks and the rest stays white.")
     return 0
 
 
-def read_log(pfad):
-    """The rows of a `battctl watch` log. Returns (zeilen, fehler)."""
+def read_log(path):
+    """The rows of a `battctl watch` log. Returns (rows, error)."""
     try:
-        with open(pfad) as fh:
+        with open(path) as fh:
             roh = fh.read().splitlines()
-    except OSError as fehler:
-        return [], str(fehler)
-    zeilen = []
-    for zeile in roh:
-        teile = zeile.split(",")
-        if len(teile) < 5 or teile[0] == "time":
+    except OSError as error:
+        return [], str(error)
+    rows = []
+    for line in roh:
+        parts = line.split(",")
+        if len(parts) < 5 or parts[0] == "time":
             continue                      # Kopfzeile, oder abgeschnitten
         try:
-            watt = float(teile[2])
+            watt = float(parts[2])
         except ValueError:
             continue
         # Two shapes, because the column has had two: the panel's DPMS
         # state ("On"/"Off") and, on a device without that node, the
         # backlight number. Anything else is "do not know".
-        roh_licht = teile[4].strip()
+        roh_licht = parts[4].strip()
         if roh_licht in ("On", "Off"):
             licht = roh_licht == "On"
         else:
@@ -1426,103 +1426,103 @@ def read_log(pfad):
                 licht = int(roh_licht) > 0
             except ValueError:
                 licht = None
-        zeilen.append({"zeit": teile[0], "state": teile[1], "watt": watt,
-                       "percent": teile[3], "screen": licht})
-    if not zeilen:
-        return [], "no readings in " + pfad
-    return zeilen, None
+        rows.append({"time_": parts[0], "state": parts[1], "watt": watt,
+                       "percent": parts[3], "screen": licht})
+    if not rows:
+        return [], "no readings in " + path
+    return rows, None
 
 
-def summarise(zeilen):
-    """Quantile je Zustand, und fuer das Entladen getrennt nach Bildschirm.
+def summarise(rows):
+    """Quantiles per state, and for the discharge half split by screen.
 
-    Getrennt, weil nur die eine Haelfte die Schwellen bestimmt: dieses
-    Symbol sieht nur, wer auf den Bildschirm schaut. Die Ruhelast eines
-    Telefons auf dem Tisch ist eine andere Zahl und gehoert nicht in
-    dieselbe Verteilung.
+    Split because only one of those halves decides the thresholds: this icon
+    is seen only by somebody looking at the screen. The idle draw of a phone
+    on a table is a different number and does not belong in the same
+    distribution.
     """
-    gruppen = {}
-    for zeile in zeilen:
-        schluessel = zeile["state"]
-        gruppen.setdefault(schluessel, []).append(zeile["watt"])
-        if zeile["state"] == "Discharging" and zeile["screen"] is not None:
-            wohin = ("Discharging, screen on" if zeile["screen"]
+    groups = {}
+    for line in rows:
+        schluessel = line["state"]
+        groups.setdefault(schluessel, []).append(line["watt"])
+        if line["state"] == "Discharging" and line["screen"] is not None:
+            whither = ("Discharging, screen on" if line["screen"]
                      else "Discharging, screen off")
-            gruppen.setdefault(wohin, []).append(zeile["watt"])
-    wechsel, vorher = 0, None
-    for zeile in zeilen:
-        if vorher is not None and zeile["state"] != vorher:
-            wechsel += 1
-        vorher = zeile["state"]
-    return gruppen, wechsel
+            groups.setdefault(whither, []).append(line["watt"])
+    changes, before = 0, None
+    for line in rows:
+        if before is not None and line["state"] != before:
+            changes += 1
+        before = line["state"]
+    return groups, changes
 
 
-def suggestion(werte):
+def suggestion(values):
     """Amber at p90, red at p98, to a tenth of a watt.
 
     So that the unusual tenth speaks and the rest stays plain. Returns
     None when the two would land on the same number - then there is not
     enough spread in the data to tell "unusual" from "ordinary".
     """
-    if len(werte) < 30:
+    if len(values) < 30:
         return None
-    gelb = round(quantil(werte, 0.9), 1)
-    rot = round(quantil(werte, 0.98), 1)
-    if gelb <= 0 or rot <= gelb:
+    amber_at = round(quantil(values, 0.9), 1)
+    red_at = round(quantil(values, 0.98), 1)
+    if amber_at <= 0 or red_at <= amber_at:
         return None
-    return gelb, rot
+    return amber_at, red_at
 
 
 def cmd_summarise(argv):
-    pfad, anwenden = None, False
+    path, apply_it = None, False
     for wort in argv:
         if wort == "--apply":
-            anwenden = True
-        elif not wort.startswith("-") and pfad is None:
-            pfad = wort
+            apply_it = True
+        elif not wort.startswith("-") and path is None:
+            path = wort
         else:
             print("Usage: battctl summarise <log.csv> [--apply]",
                   file=sys.stderr)
             return 2
-    if pfad is None:
+    if path is None:
         print("Usage: battctl summarise <log.csv> [--apply]", file=sys.stderr)
         return 2
 
-    zeilen, fehler = read_log(pfad)
-    if fehler:
-        print(fehler, file=sys.stderr)
+    rows, error = read_log(path)
+    if error:
+        print(error, file=sys.stderr)
         return 1
-    gruppen, wechsel = summarise(zeilen)
+    groups, changes = summarise(rows)
 
     print("%d readings, %s to %s"
-          % (len(zeilen), zeilen[0]["zeit"], zeilen[-1]["zeit"]))
-    if wechsel:
+          % (len(rows), rows[0]["time_"], rows[-1]["time_"]))
+    if changes:
         print("direction changed %d times - a charging figure from this is "
-              "not a baseline" % wechsel)
-    for name in sorted(gruppen):
-        werte = gruppen[name]
-        print("\n%s: %d readings" % (name, len(werte)))
-        for wort, anteil in (("median", 0.5), ("p90", 0.9), ("p98", 0.98)):
-            print("  %-7s %5.2f W" % (wort, quantil(werte, anteil)))
-        print("  %-7s %5.2f W" % ("max", max(werte)))
+              "not a baseline" % changes)
+    for name in sorted(groups):
+        values = groups[name]
+        print("\n%s: %d readings" % (name, len(values)))
+        for wort, fraction in (("median", 0.5), ("p90", 0.9), ("p98", 0.98)):
+            print("  %-7s %5.2f W" % (wort, quantil(values, fraction)))
+        print("  %-7s %5.2f W" % ("max", max(values)))
 
     # The thresholds come from the screen-on half, and from nothing else.
-    massgeblich = gruppen.get("Discharging, screen on") or []
-    vorschlag = suggestion(massgeblich)
+    massgeblich = groups.get("Discharging, screen on") or []
+    suggestion_ = suggestion(massgeblich)
     print()
-    if vorschlag is None:
+    if suggestion_ is None:
         print("Not enough to set a threshold from: %d readings with the "
               "screen on. Use the phone on battery for a while and run the "
               "log again." % len(massgeblich))
         return 1
-    gelb, rot = vorschlag
+    amber_at, red_at = suggestion_
     print("Suggested: drain_amber_w %.1f (p90), drain_red_w %.1f (p98)"
-          % (gelb, rot))
-    if not anwenden:
-        print("Apply with: battctl summarise %s --apply" % pfad)
+          % (amber_at, red_at))
+    if not apply_it:
+        print("Apply with: battctl summarise %s --apply" % path)
         return 0
     cfg = load_config()
-    cfg["drain_amber_w"], cfg["drain_red_w"] = gelb, rot
+    cfg["drain_amber_w"], cfg["drain_red_w"] = amber_at, red_at
     save_config(cfg)
     print("Set. The daemon picks the file up on its own.")
     return 0
@@ -1540,17 +1540,17 @@ def _screen_on():
     Falls back to the backlight number where there is no DRM node, and to
     "?" where there is neither - a log column, not a verdict.
     """
-    for pfad in ("/sys/class/drm/card0-DSI-1/dpms",
+    for path in ("/sys/class/drm/card0-DSI-1/dpms",
                  "/sys/class/drm/card0-eDP-1/dpms"):
         try:
-            with open(pfad) as fh:
+            with open(path) as fh:
                 return fh.read().strip()          # "On" / "Off"
         except OSError:
             continue
-    for pfad in ("/sys/class/backlight/panel0-backlight/brightness",
+    for path in ("/sys/class/backlight/panel0-backlight/brightness",
                  "/sys/class/leds/lcd-backlight/brightness"):
         try:
-            with open(pfad) as fh:
+            with open(path) as fh:
                 return fh.read().strip()
         except OSError:
             continue
