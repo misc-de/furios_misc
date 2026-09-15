@@ -423,7 +423,7 @@ def write_theme(base, power=None, level=None, themes_dir=None, colors=None):
     name = theme_name(base, power, level)
     gtk3 = os.path.join(wurzel, name, "gtk-3.0")
     os.makedirs(gtk3, exist_ok=True)
-    kopf = ("/* Written by battctl (furios_battery). Deleted by "
+    kopf = ("/* Written by battctl (furios_misc). Deleted by "
             "`battctl restore`. */\n")
     with open(os.path.join(gtk3, "gtk.css"), "w") as fh:
         fh.write(_import(hell) + kopf + regel)
