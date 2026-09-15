@@ -27,8 +27,16 @@ phosh ist GTK3, und sein Akkusymbol ist der CSS-Knoten `phosh-battery-info`.
 Eine Zeile CSS faerbt es:
 
 ```css
-phosh-battery-info image { color: #2ec27e; }
+phosh-battery-info image {
+  color: #2ec27e;
+  -gtk-icon-palette: success #2ec27e, warning #2ec27e, error #2ec27e;
+}
 ```
+
+Zwei Deklarationen, weil das Symbol aus **zwei Pfaden** besteht: Huelle und
+Blitz folgen `color`, die Fuellung (der Ladestand) traegt im Adwaita-SVG
+`class="success"` und kommt aus der Symbol-Palette. Ohne die zweite Zeile
+bleibt die Fuellung weiss in einem roten Akku.
 
 Der naheliegende Ort dafuer ist `~/.config/gtk-3.0/gtk.css` — und der ist eine
 Sackgasse: GTK3 liest die Datei **einmal beim Programmstart** und nie wieder.
@@ -42,10 +50,16 @@ Projekt schreibt deshalb drei Themes, die nichts weiter sind als das Theme
 des Nutzers plus jene eine Zeile:
 
 ```
-~/.themes/adw-gtk3-batt-green/gtk-3.0/gtk.css
+~/.themes/adw-gtk3-batt5ae1-green/gtk-3.0/gtk.css
     @import url("file:///usr/share/themes/adw-gtk3/gtk-3.0/gtk.css");
-    phosh-battery-info image { color: #2ec27e; }
+    phosh-battery-info image { color: #2ec27e; … }
 ```
+
+Die vier Zeichen im Namen sind die Kennung der Regel. Sie stehen dort, weil
+GTK3 ein benanntes Theme **fuer die Lebensdauer des Prozesses** zwischen-
+speichert, nach Namen und ohne zweiten Blick auf die Datei: aendert man die
+Regel und behaelt den Namen, zeigt phosh bis zum naechsten Neustart weiter
+die Fassung von damals.
 
 …und schaltet zwischen ihnen um.
 
@@ -57,17 +71,38 @@ der Dienst merkt es, baut auf dem neuen auf und traegt die Farbe hinueber.
 
 ## Schwellen
 
-| | gruen | orange | rot |
-|---|---|---|---|
-| Laden | ab 7 W | ab 3 W | darunter |
-| Entladen | bis 1 W | bis 3 W | darueber |
+| | weiss | gruen | orange | rot |
+|---|---|---|---|---|
+| Laden | — | ab 7 W | ab 3 W | darunter |
+| Entladen | unter 3 W | — | ab 3 W | ab 5 W |
 
-Die Werte sind **vorlaeufig** und sollen korrigiert werden, sobald einmal eine
-ganze Ladung mitgesehen wurde; siehe FINDINGS.md. Das Telefon handelt ueber
-USB-PD 12,7 W aus, gemessen wurden bisher hoechstens 5,9 W.
+Im Akkubetrieb ist **weiss der Normalfall**: ein Telefon, das tut, was ein
+Telefon tut, sagt nichts, und nur ein ungewoehnlicher Verbrauch meldet sich.
+Gruen gibt es dort nicht - eine Farbe, die den ganzen Tag leuchtet, ist keine
+Nachricht mehr.
+
+Die Werte sind **vorlaeufig**. Sie gehoeren gemessen, nicht geraten - dafuer
+gibt es `battctl watch`:
+
+```
+battctl watch 3600 --csv ~/verbrauch.csv     # eine Stunde mitschreiben
+```
+
+Am Ende stehen Median, p90, p98 und Maximum, getrennt nach Laden und
+Entladen. Ein brauchbarer Anfang ist **orange bei p90, rot bei p98**: dann
+meldet sich das gewoehnliche Zehntel und der Rest bleibt weiss.
+
+Wichtig dabei: fuer den Akkubetrieb zaehlt der Verbrauch mit **einge-
+schaltetem Bildschirm**. Dieses Symbol sieht nur, wer auf den Bildschirm
+schaut - die 0,2 W eines Telefons auf dem Tisch sind keine sinnvolle Basis.
+Die Mitschrift traegt deshalb den Wert der Hintergrundbeleuchtung mit.
+
+Das Telefon handelt ueber USB-PD 12,7 W aus, gemessen wurden bisher
+hoechstens 5,9 W - auch die Ladeschwellen sind also noch nicht bestaetigt.
 
 ```
 battctl config charge-green-w 6
+battctl config drain-amber-w 2.5
 battctl config discharging on
 battctl config                  # alles, was es gibt
 ```
@@ -96,5 +131,5 @@ tests/run-tests.sh      # ohne Display, ohne Akku, ohne root - NIE mit sudo
 tests/coverage.sh
 ```
 
-82 Tests, 90,8 % der Zeilen. Was fehlt, ist die D-Bus-Verdrahtung des Daemons
+93 Tests, 88,6 % der Zeilen. Was fehlt, ist die D-Bus-Verdrahtung des Daemons
 — die wird am Geraet belegt, nicht simuliert (FINDINGS.md).

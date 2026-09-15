@@ -159,10 +159,19 @@ class Schwellen(Basis):
         self.assertEqual(b.bucket_for(7.0, True, self.cfg), "green")
         self.assertEqual(b.bucket_for(3.0, True, self.cfg), "amber")
 
-    def test_entladen_ist_umgekehrt(self):
-        self.assertEqual(b.bucket_for(0.5, False, self.cfg), "green")
-        self.assertEqual(b.bucket_for(2.0, False, self.cfg), "amber")
+    def test_entladen_bleibt_normalerweise_weiss(self):
+        """White is the normal state on battery: a phone doing what a phone
+        does says nothing, and only an unusual drain speaks up."""
+        self.assertIsNone(b.bucket_for(0.2, False, self.cfg))
+        self.assertIsNone(b.bucket_for(2.0, False, self.cfg))
+        self.assertEqual(b.bucket_for(3.5, False, self.cfg), "amber")
         self.assertEqual(b.bucket_for(9.0, False, self.cfg), "red")
+
+    def test_entladen_kennt_kein_gruen(self):
+        """Green on battery would be a colour on all day - no signal at
+        all."""
+        for watt in (0.0, 0.5, 1.0, 2.9, 3.5, 12.0):
+            self.assertNotEqual(b.bucket_for(watt, False, self.cfg), "green")
 
     def test_hysterese_haelt_gruen(self):
         """6.5 W is under the 7 W it took to go green, but not far enough
@@ -178,19 +187,22 @@ class Schwellen(Basis):
         self.assertEqual(b.bucket_for(7.5, True, self.cfg, "amber"), "amber")
         self.assertEqual(b.bucket_for(7.8, True, self.cfg, "amber"), "green")
 
-    def test_hysterese_beim_entladen(self):
-        self.assertEqual(b.bucket_for(1.05, False, self.cfg, "green"), "green")
-        self.assertEqual(b.bucket_for(1.2, False, self.cfg, "green"), "amber")
+    def test_aus_weiss_heraus_kostet_die_farbe_einen_zehntel_mehr(self):
+        """Otherwise the icon would light up on the noise of a reading that
+        sits on the threshold."""
+        self.assertIsNone(b.bucket_for(3.2, False, self.cfg, None))
+        self.assertEqual(b.bucket_for(3.4, False, self.cfg, None), "amber")
 
     def test_hysterese_beim_entladen_aus_gelb_und_rot(self):
-        # aus gelb heraus kostet beides einen Zehntel mehr
-        self.assertEqual(b.bucket_for(0.95, False, self.cfg, "amber"), "amber")
-        self.assertEqual(b.bucket_for(0.85, False, self.cfg, "amber"), "green")
-        self.assertEqual(b.bucket_for(3.2, False, self.cfg, "amber"), "amber")
-        self.assertEqual(b.bucket_for(3.4, False, self.cfg, "amber"), "red")
-        # und aus rot heraus auch
-        self.assertEqual(b.bucket_for(2.8, False, self.cfg, "red"), "red")
-        self.assertEqual(b.bucket_for(2.6, False, self.cfg, "red"), "amber")
+        # aus gelb heraus nach unten und nach oben
+        self.assertEqual(b.bucket_for(2.8, False, self.cfg, "amber"), "amber")
+        self.assertIsNone(b.bucket_for(2.6, False, self.cfg, "amber"))
+        self.assertEqual(b.bucket_for(5.4, False, self.cfg, "amber"), "amber")
+        self.assertEqual(b.bucket_for(5.6, False, self.cfg, "amber"), "red")
+        # und aus rot heraus
+        self.assertEqual(b.bucket_for(4.6, False, self.cfg, "red"), "red")
+        self.assertEqual(b.bucket_for(4.4, False, self.cfg, "red"), "amber")
+        self.assertIsNone(b.bucket_for(1.0, False, self.cfg, "red"))
 
     def test_abgeschaltet_heisst_keine_farbe(self):
         self.battery()
@@ -198,11 +210,18 @@ class Schwellen(Basis):
         self.assertIsNone(b.wanted_bucket(b.read_battery(), cfg))
 
     def test_entladen_nur_wenn_gewollt(self):
-        self.battery(status="Discharging", ampere=0.2, volt=3.9)   # 0.78 W
+        self.battery(status="Discharging", ampere=1.5, volt=3.9)   # 5.85 W
         mess = b.read_battery()
         self.assertIsNone(b.wanted_bucket(mess, self.cfg))
         self.assertEqual(b.wanted_bucket(mess, dict(self.cfg, discharging=True)),
-                         "green")
+                         "red")
+
+    def test_gewoehnliches_entladen_faerbt_auch_dann_nichts(self):
+        """The option is "say something when it is unusual", not "be
+        coloured whenever the cable is out"."""
+        self.battery(status="Discharging", ampere=0.2, volt=3.9)   # 0.78 W
+        self.assertIsNone(b.wanted_bucket(b.read_battery(),
+                                          dict(self.cfg, discharging=True)))
 
     def test_voll_bekommt_keine_farbe(self):
         self.battery(status="Full", ampere=0.0, volt=4.4)
@@ -218,8 +237,13 @@ class Schwellen(Basis):
 
 class Namen(Basis):
     def test_eigenes_theme_wird_erkannt(self):
-        self.assertEqual(b.base_name("adw-gtk3-batt-green"), "adw-gtk3")
+        self.assertEqual(b.base_name(b.theme_name("adw-gtk3", "green")),
+                         "adw-gtk3")
+        # And the ones an older version of the rule wrote, with a different
+        # token or none at all - otherwise an upgrade would take somebody's
+        # own theme to be "adw-gtk3-batt-green".
         self.assertEqual(b.base_name("adw-gtk3-batt-red"), "adw-gtk3")
+        self.assertEqual(b.base_name("adw-gtk3-batt9f9f-red"), "adw-gtk3")
 
     def test_fremdes_theme_bleibt(self):
         self.assertEqual(b.base_name("adw-gtk3"), "adw-gtk3")
@@ -228,7 +252,8 @@ class Namen(Basis):
         self.assertEqual(b.base_name(""), "")
 
     def test_name_zusammensetzen(self):
-        self.assertEqual(b.theme_name("adw-gtk3", "amber"), "adw-gtk3-batt-amber")
+        self.assertEqual(b.theme_name("adw-gtk3", "amber"),
+                         "adw-gtk3-batt%s-amber" % b.TOKEN)
 
     def test_hin_und_zurueck(self):
         for basis in ("adw-gtk3", "Adwaita", "a-b-c"):
@@ -251,9 +276,45 @@ class Themes(Basis):
         self.make_theme("base")
         b.write_themes("base")
         for bucket, farbe in b.COLORS.items():
-            pfad = os.path.join(self.themes, "base-batt-" + bucket,
+            pfad = os.path.join(self.themes, b.theme_name("base", bucket),
                                 "gtk-3.0", "gtk.css")
             self.assertIn(farbe, open(pfad).read())
+
+    def test_die_fuellung_wird_mitgefaerbt(self):
+        """The icon is two paths: the shell follows `color`, the level
+        inside is drawn from the symbolic palette. Colouring only the first
+        leaves a white filling in a red battery - which is what the phone
+        showed on 15.9.2026."""
+        self.make_theme("base")
+        b.write_themes("base")
+        inhalt = open(os.path.join(self.themes, b.theme_name("base", "red"),
+                                   "gtk-3.0", "gtk.css")).read()
+        self.assertIn("-gtk-icon-palette", inhalt)
+        # All three, because below 20 % the fill is warning and error rather
+        # than success.
+        for name in ("success", "warning", "error"):
+            self.assertIn("%s %s" % (name, b.COLORS["red"]), inhalt)
+
+    def test_die_regel_ist_gueltiges_gtk3_css(self):
+        """Checked against GTK itself rather than by reading it: an unknown
+        property is dropped with a warning nobody sees, and the icon would
+        simply stay half-coloured."""
+        try:
+            import gi
+            gi.require_version("Gtk", "3.0")
+            from gi.repository import Gtk
+        except (ImportError, ValueError):                 # pragma: no cover
+            self.skipTest("kein GTK3")
+        self.make_theme("base")
+        b.write_themes("base")
+        pfad = os.path.join(self.themes, b.theme_name("base", "green"), "gtk-3.0",
+                            "gtk.css")
+        text = open(pfad).read().split("*/", 1)[1]        # ohne @import
+        fehler = []
+        prov = Gtk.CssProvider()
+        prov.connect("parsing-error", lambda p, s, e: fehler.append(e.message))
+        prov.load_from_data(text.encode())
+        self.assertEqual([], fehler)
 
     def test_ohne_dunkles_blatt_wird_keines_erfunden(self):
         """The trap that would change the whole look of the phone: GTK3 uses
@@ -261,14 +322,14 @@ class Themes(Basis):
         would put the LIGHT stylesheet behind dark mode."""
         self.make_theme("base", dark=False)
         b.write_themes("base")
-        pfad = os.path.join(self.themes, "base-batt-green", "gtk-3.0",
+        pfad = os.path.join(self.themes, b.theme_name("base", "green"), "gtk-3.0",
                             "gtk-dark.css")
         self.assertFalse(os.path.exists(pfad))
 
     def test_dunkles_blatt_verschwindet_wieder(self):
         self.make_theme("base", dark=True)
         b.write_themes("base")
-        pfad = os.path.join(self.themes, "base-batt-green", "gtk-3.0",
+        pfad = os.path.join(self.themes, b.theme_name("base", "green"), "gtk-3.0",
                             "gtk-dark.css")
         self.assertTrue(os.path.exists(pfad))
         self.make_theme("base", dark=False)
@@ -290,7 +351,7 @@ class Themes(Basis):
         path has to keep resolving against where IT lives."""
         self.make_theme("base")
         b.write_themes("base")
-        inhalt = open(os.path.join(self.themes, "base-batt-red",
+        inhalt = open(os.path.join(self.themes, b.theme_name("base", "red"),
                                    "gtk-3.0", "gtk.css")).read()
         self.assertIn("file://" + os.path.join(self.themes, "base",
                                                "gtk-3.0", "gtk.css"), inhalt)
@@ -313,17 +374,17 @@ class Themes(Basis):
     def test_entfernen_uebergeht_was_es_nicht_lesen_kann(self):
         """A directory that fits the name but holds no stylesheet of ours is
         not ours to delete."""
-        os.makedirs(os.path.join(self.themes, "base-batt-green", "gtk-3.0"))
+        os.makedirs(os.path.join(self.themes, b.theme_name("base", "green"), "gtk-3.0"))
         self.assertEqual(b.remove_themes(), 0)
         self.assertTrue(os.path.isdir(os.path.join(self.themes,
-                                                   "base-batt-green")))
+                                                   b.theme_name("base", "green"))))
 
     def test_eingebautes_theme_wird_per_resource_importiert(self):
         """Adwaita has no files on disk - GTK3 carries it as a resource, and
         the import has to say so rather than pointing at a path."""
         namen = b.write_themes("Adwaita")
         self.assertEqual(len(namen), 3)
-        inhalt = open(os.path.join(self.themes, "Adwaita-batt-green",
+        inhalt = open(os.path.join(self.themes, b.theme_name("Adwaita", "green"),
                                    "gtk-3.0", "gtk.css")).read()
         self.assertIn('@import url("resource:///org/gtk/libgtk/theme/Adwaita/',
                       inhalt)
@@ -334,8 +395,8 @@ class Einstellung(Basis):
     def test_lesen_und_schreiben(self):
         s = b.Setting()
         self.assertEqual(s.get(), "base")
-        self.assertTrue(s.set("base-batt-green"))
-        self.assertEqual(s.get(), "base-batt-green")
+        self.assertTrue(s.set(b.theme_name("base", "green")))
+        self.assertEqual(s.get(), b.theme_name("base", "green"))
 
     def test_fehlende_datei_ist_leer(self):
         os.unlink(self.setting)
@@ -465,7 +526,7 @@ class Befehle(Basis):
     def test_status_kennt_die_laufende_farbe(self):
         self.battery(ampere=0.2, volt=4.2)
         self.make_theme("base")
-        self.set_theme("base-batt-green")
+        self.set_theme(b.theme_name("base", "green"))
         _, aus, _ = self.run_cmd("status")
         self.assertIn("colour:       green", aus)
         self.assertIn("base theme:   base", aus)
@@ -505,12 +566,12 @@ class Befehle(Basis):
         self.assertEqual(rc, 2)
         self.assertIn("above", err)
         self.assertEqual(b.load_config()["charge_green_w"], 7.0)
-        rc, _, err = self.run_cmd("config", "drain_green_w", "5")
+        rc, _, err = self.run_cmd("config", "drain_amber_w", "9")
         self.assertEqual(rc, 2)
         self.assertIn("below", err)
 
     def test_reset_setzt_zurueck(self):
-        self.set_theme("base-batt-amber")
+        self.set_theme(b.theme_name("base", "amber"))
         rc, _, _ = self.run_cmd("reset")
         self.assertEqual(rc, 0)
         self.assertEqual(b.Setting().get(), "base")
@@ -523,7 +584,7 @@ class Befehle(Basis):
         self.make_theme("base")
         b.write_themes("base")
         b.save_config(dict(b.DEFAULTS, discharging=True))
-        self.set_theme("base-batt-red")
+        self.set_theme(b.theme_name("base", "red"))
         rc, aus, _ = self.run_cmd("restore")
         self.assertEqual(rc, 0)
         self.assertIn("3 colour theme(s) removed", aus)
@@ -534,6 +595,41 @@ class Befehle(Basis):
     def test_restore_ohne_alles(self):
         rc, _, _ = self.run_cmd("restore")
         self.assertEqual(rc, 0)
+
+
+class Mitschnitt(Basis):
+    """`battctl watch` - das Messwerkzeug fuer die Schwellen."""
+
+    def test_quantile(self):
+        werte = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        self.assertEqual(b.quantil(werte, 0.5), 6)
+        self.assertEqual(b.quantil(werte, 0.9), 9)
+        self.assertEqual(b.quantil(werte, 1.0), 10)
+        self.assertEqual(b.quantil([7], 0.9), 7)
+        self.assertIsNone(b.quantil([], 0.5))
+
+    def test_schreibt_zeilen_und_eine_zusammenfassung(self):
+        self.battery(status="Discharging", ampere=0.5, volt=3.9)
+        pfad = os.path.join(self.tmp, "log.csv")
+        rc, aus, _ = self.run_cmd("watch", "0.2", "--interval", "0.05",
+                                  "--csv", pfad)
+        self.assertEqual(rc, 0)
+        self.assertIn("time,state,watt,percent,screen", aus)
+        self.assertIn("Discharging:", aus)
+        self.assertIn("median", aus)
+        zeilen = open(pfad).read().splitlines()
+        self.assertGreater(len(zeilen), 1)
+        self.assertTrue(zeilen[1].startswith("2"))      # ISO-Datum
+
+    def test_unlesbarer_akku_erzeugt_keine_zeilen(self):
+        rc, aus, _ = self.run_cmd("watch", "0.1", "--interval", "0.05")
+        self.assertEqual(rc, 0)
+        self.assertNotIn("Discharging:", aus)
+
+    def test_unsinnige_argumente(self):
+        rc, _, err = self.run_cmd("watch", "vielleicht")
+        self.assertEqual(rc, 2)
+        self.assertIn("Usage", err)
 
 
 class DerLauf(Basis):
@@ -549,7 +645,7 @@ class DerLauf(Basis):
     def test_erste_farbe_kommt_sofort(self):
         self.assertTrue(self.d.tick(now=1000))
         self.assertEqual(self.d.showing, "amber")
-        self.assertEqual(b.Setting().get(), "base-batt-amber")
+        self.assertEqual(b.Setting().get(), b.theme_name("base", "amber"))
 
     def test_gleiche_farbe_schreibt_nicht(self):
         self.d.tick(now=1000)
@@ -565,7 +661,7 @@ class DerLauf(Basis):
         self.battery(ampere=3.0, volt=4.3)          # 12.9 W -> green
         self.assertFalse(self.d.tick(now=1010))
         self.assertEqual(self.d.showing, "amber")
-        self.assertEqual(b.Setting().get(), "base-batt-amber")
+        self.assertEqual(b.Setting().get(), b.theme_name("base", "amber"))
         self.assertTrue(self.d.tick(now=1100))
         self.assertEqual(self.d.showing, "green")
 
@@ -585,14 +681,15 @@ class DerLauf(Basis):
         """The median is taken over readings of the same direction only -
         3 W in and 3 W out are opposite verdicts."""
         self.d.cfg["discharging"] = True
-        self.d.tick(now=1000)
-        self.battery(status="Discharging", ampere=0.1, volt=3.9)
+        self.d.tick(now=1000)                       # laedt mit 5.16 W: amber
+        self.battery(status="Discharging", ampere=1.6, volt=3.9)   # 6.24 W
         self.d.tick(now=1100)
-        self.assertEqual(self.d.showing, "green")
+        # Als Ladeleistung waere das gruen, als Verbrauch ist es rot.
+        self.assertEqual(self.d.showing, "red")
 
     def test_stecker_raus_nimmt_die_farbe_weg(self):
         self.d.tick(now=1000)
-        self.battery(status="Discharging", ampere=0.5, volt=3.9)
+        self.battery(status="Discharging", ampere=0.5, volt=3.9)   # 1.95 W
         self.assertTrue(self.d.tick(now=1100))
         self.assertIsNone(self.d.showing)
         self.assertEqual(b.Setting().get(), "base")
@@ -624,21 +721,21 @@ class DerLauf(Basis):
         self.set_theme("anderes")
         self.d.tick(now=1100)
         self.assertEqual(self.d.base, "anderes")
-        self.assertEqual(b.Setting().get(), "anderes-batt-amber")
+        self.assertEqual(b.Setting().get(), b.theme_name("anderes", "amber"))
         self.assertTrue(os.path.isdir(os.path.join(self.themes,
-                                                   "anderes-batt-green")))
+                                                   b.theme_name("anderes", "green"))))
 
     def test_eigene_farbe_gilt_nicht_als_neues_theme(self):
         self.d.tick(now=1000)
-        self.assertFalse(self.d.adopt("base-batt-green"))
+        self.assertFalse(self.d.adopt(b.theme_name("base", "green")))
         self.assertEqual(self.d.base, "base")
 
     def test_uebernimmt_eine_farbe_aus_einem_frueheren_lauf(self):
         """After a crash the theme is still green. A fresh daemon has to
         start from what is on screen, or dwell and hysteresis both count from
         a colour nobody is looking at."""
-        self.set_theme("base-batt-green")
-        d = b.Daemon(jetzt="base-batt-green")
+        self.set_theme(b.theme_name("base", "green"))
+        d = b.Daemon(jetzt=b.theme_name("base", "green"))
         d.ensure_themes()
         # 6.67 W: under the 7 W that buys green, inside the tenth that keeps
         # it. A daemon that did not adopt what is on screen would read this
@@ -646,7 +743,7 @@ class DerLauf(Basis):
         self.battery(ampere=1.55, volt=4.3)
         self.assertFalse(d.tick(now=1000))
         self.assertEqual(d.showing, "green")
-        self.assertEqual(b.Setting().get(), "base-batt-green")
+        self.assertEqual(b.Setting().get(), b.theme_name("base", "green"))
         # And it really is hysteresis, not a colour that can never leave.
         self.battery(ampere=1.2, volt=4.3)          # 5.16 W
         self.assertTrue(d.tick(now=1100))
@@ -671,16 +768,16 @@ class DerLauf(Basis):
         d = b.Daemon(jetzt="base")
         d.themes = []
         self.assertTrue(d.apply("green", now=1000))
-        self.assertEqual(b.Setting().get(), "base-batt-green")
+        self.assertEqual(b.Setting().get(), b.theme_name("base", "green"))
 
     def test_geaenderte_konfiguration_wirkt_ohne_neustart(self):
         """The app writes the config file; a daemon that read it once would
         make its switch look broken until the next boot."""
-        self.battery(status="Discharging", ampere=0.2, volt=3.9)
+        self.battery(status="Discharging", ampere=1.6, volt=3.9)   # 6.24 W
         self.assertFalse(self.d.tick(now=1000))     # entladen ist aus
         b.save_config(dict(b.DEFAULTS, discharging=True))
         self.assertTrue(self.d.tick(now=1100))
-        self.assertEqual(self.d.showing, "green")
+        self.assertEqual(self.d.showing, "red")
 
     def test_unveraenderte_konfiguration_wird_nicht_neu_gelesen(self):
         b.save_config(dict(b.DEFAULTS, charge_green_w=9.0))

@@ -86,6 +86,37 @@ gresource extract /usr/libexec/phosh /mobi/phosh/stylesheet/common.css
 strings /usr/libexec/phosh | grep phosh-battery
 ```
 
+## 5a · Das Symbol hat zwei Pfade, und einer blieb weiss
+
+Am Geraet gesehen, nachdem die erste Fassung lief: Huelle und Blitz rot, die
+**Fuellung weiss**. Das Adwaita-SVG erklaert es:
+
+```
+<path class="success" d="m 5 7 v 6 h 3 …" fill="#33d17a"/>   <- der Ladestand
+<path d="m 7 0 c -1 0 …" fill="#2e3434"/>                     <- Huelle+Blitz
+```
+
+`color` faerbt nur den zweiten. Der erste kommt aus GTK3s Symbol-Palette und
+wird mit `-gtk-icon-palette: success …, warning …, error …` gesetzt. Kopflos
+nachgewiesen (`Gtk.IconInfo.load_symbolic`): mit success=rot sind 112 von 112
+deckenden Pixeln rot, mit success=weiss bleiben genau 24 weiss - das ist die
+Fuellung. `Gtk.CssProvider` nimmt die Eigenschaft ohne Parsefehler an.
+
+Alle drei Palettennamen bekommen dieselbe Farbe: unter 20 % ist die Fuellung
+`warning` bzw. `error` statt `success`, und ein Symbol, das aussen gruen und
+innen rot ist, liest sich als Stoerung und nicht als Ladestand.
+
+## 5b · GTK3 merkt sich ein Theme nach NAMEN, nicht nach Datei
+
+`gtk_css_provider_get_named()` haelt geladene Themes in einer statischen
+Tabelle, fuer die Lebensdauer des Prozesses, ohne die Datei erneut anzusehen.
+Die Regel zu aendern und den Namen zu behalten heisst also: die Datei auf der
+Platte ist richtig, phosh zeigt bis zum naechsten Neustart die alte Fassung,
+und nichts sagt warum. Der Theme-Name traegt deshalb vier Zeichen aus einem
+SHA-1 der Regel (`adw-gtk3-batt5ae1-green`). Aeltere Generationen werden beim
+Schreiben mit entfernt, damit sich nicht pro Aktualisierung ein Verzeichnis
+ansammelt.
+
 ## 6 · Die Falle, die das ganze Telefon umgefaerbt haette
 
 GTK3 nimmt `gtk-dark.css`, wenn es die Datei gibt und die Sitzung dunkel
@@ -109,6 +140,24 @@ eines hat, und loescht es wieder, wenn es verschwindet. Test:
   Messungen lag bei 6,9 W, die Hysterese verlangte 7,7 W — die Farbe blieb,
   weil sie ohnehin dieselbe war, und die Wartezeit wurde nie erreicht. Die
   Zeile `return False` blieb unerreicht und hat es verraten.
+
+## 7a · Die Schwellen sind noch nicht gemessen
+
+Die Vorgaben (laden 7/3 W, entladen 3/5 W) sind geraten und als vorlaeufig
+gekennzeichnet. `battctl watch` schreibt die Messreihe mit und nennt am Ende
+Median, p90, p98 und Maximum, getrennt nach Laden und Entladen.
+
+Fuer den Akkubetrieb zaehlt dabei ausdruecklich der Verbrauch mit
+**eingeschaltetem Bildschirm**: das Symbol sieht nur, wer hinschaut, also ist
+"normal" das, was das Telefon im Gebrauch zieht, und nicht die Ruhelast auf
+dem Tisch. Die Mitschrift fuehrt deshalb eine Spalte mit.
+
+Was dafuer NICHT taugt, beides hier gemessen: `loginctl … IdleHint` stand bei
+ausgeschaltetem Bildschirm auf `no`, und `/sys/class/leds/lcd-backlight/
+brightness` behielt seinen letzten Wert (629 von 2047). Ein verlaesslicher
+Anzeiger war nur, dass `grim` bei dunklem Bildschirm mit
+`failed to copy output HWCOMPOSER-1` scheitert - fuer eine Messreihe absurd,
+also steht der Rohwert in der Spalte und wer die Reihe auswertet, entscheidet.
 
 ## 8 · Was hier NICHT geprueft ist
 

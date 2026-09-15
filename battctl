@@ -35,8 +35,10 @@ Nothing here needs root. It reads two files in /sys, writes ~/.themes, and
 sets one gsettings key.
 """
 
+import hashlib
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -60,14 +62,40 @@ THEME_DIRS = [
 ]
 
 SETTING = "org.gnome.desktop.interface gtk-theme"
-# The marker that makes one of our themes recognisable as ours. It has to
-# survive a crash: the daemon may be killed with a colour theme active, and
-# the next start has to be able to tell "adw-gtk3-batt-green" from a theme
-# somebody actually chose.
-MARK = "-batt-"
 
 COLORS = {"green": "#2ec27e", "amber": "#ff7800", "red": "#e01b24"}
 BUCKETS = ("green", "amber", "red")
+
+# The rule itself, and it is two declarations because the icon is two paths.
+# The shell and the bolt follow `color`; the level inside carries
+# class="success" in the Adwaita SVG and is drawn from GTK's symbolic
+# palette, which nothing on this phone sets - it came out white inside a red
+# battery. All three palette names get the same colour: below 20 % the fill
+# is "warning" and "error" instead, and an icon that is green outside and red
+# inside reads as a fault rather than as a level.
+RULE = ("phosh-battery-info image {\n"
+        "  color: %(farbe)s;\n"
+        "  -gtk-icon-palette: success %(farbe)s, warning %(farbe)s,"
+        " error %(farbe)s;\n"
+        "}\n")
+
+# Four characters of the rule, carried in the theme name.
+#
+# Not decoration: GTK3 caches a named theme for the lifetime of the process,
+# by name, with no second look at the file. Change the rule and keep the
+# name, and phosh keeps serving the version it parsed at boot - the file on
+# disk is right, the icon is wrong, and nothing says why until the next
+# reboot. A name that changes with the rule is what makes an upgrade visible
+# the same minute.
+TOKEN = hashlib.sha1(RULE.encode()).hexdigest()[:4]
+
+# The marker that makes one of our themes recognisable as ours - including
+# the ones an older version wrote, which is why the token is matched loosely.
+# It has to survive a crash: the daemon may be killed with a colour theme
+# active, and the next start has to tell "adw-gtk3-batt1f3a-green" from a
+# theme somebody actually chose.
+MARK = re.compile(r"^(?P<base>.+)-batt[0-9a-f]{0,8}-(?P<bucket>%s)$"
+                  % "|".join(BUCKETS))
 
 DEFAULTS = {
     # Colour while charging. On by default - it is what this is for.
@@ -82,10 +110,16 @@ DEFAULTS = {
     # taking 5.9 W at its best.
     "charge_green_w": 7.0,
     "charge_amber_w": 3.0,
-    # On battery: watts out. Under drain_green_w is green, over drain_amber_w
-    # is red.
-    "drain_green_w": 1.0,
+    # On battery the scale is not three colours but two, and white is the
+    # normal state: a phone doing what a phone does says nothing, and only an
+    # unusual drain speaks up. Green would be a colour on all day, which is
+    # no signal at all.
+    #
+    # PROVISIONAL, and the numbers that most need measuring - see FINDINGS.md
+    # and `battctl watch`. What matters is the drain with the SCREEN ON,
+    # because that is the only time anybody sees this icon.
     "drain_amber_w": 3.0,
+    "drain_red_w": 5.0,
     # How far past a threshold the power has to go before the colour follows.
     # A tenth: the instantaneous current swings by a quarter of an amp from
     # one reading to the next, and without this the icon would flicker
@@ -216,18 +250,19 @@ def bucket_for(watt, charging, cfg, current=None):
         if watt >= gruen:
             return "green"
         return "amber" if watt >= gelb else "red"
-    # On battery the scale is upside down: little is good.
-    gruen, gelb = cfg["drain_green_w"], cfg["drain_amber_w"]
-    if current == "green":
-        gruen *= 1 + h
+    # On battery: white until the drain is unusual, then amber, then red.
+    # No green - the ordinary case is the one that should say nothing.
+    rot, gelb = cfg["drain_red_w"], cfg["drain_amber_w"]
+    if current == "red":
+        rot *= 1 - h
     elif current == "amber":
-        gruen *= 1 - h
-        gelb *= 1 + h
-    elif current == "red":
+        rot *= 1 + h
         gelb *= 1 - h
-    if watt <= gruen:
-        return "green"
-    return "amber" if watt <= gelb else "red"
+    else:
+        gelb *= 1 + h
+    if watt >= rot:
+        return "red"
+    return "amber" if watt >= gelb else None
 
 
 def wanted_bucket(mess, cfg, current=None):
@@ -245,16 +280,18 @@ def wanted_bucket(mess, cfg, current=None):
 
 def base_name(name):
     """The user's own theme behind a name that may be one of ours."""
-    if not name:
-        return name
-    kopf, _, rest = name.rpartition(MARK)
-    if kopf and rest in BUCKETS:
-        return kopf
-    return name
+    treffer = MARK.match(name or "")
+    return treffer.group("base") if treffer else name
+
+
+def bucket_of(name):
+    """Which colour a theme name stands for, or None if it is not ours."""
+    treffer = MARK.match(name or "")
+    return treffer.group("bucket") if treffer else None
 
 
 def theme_name(base, bucket):
-    return base + MARK + bucket
+    return "%s-batt%s-%s" % (base, TOKEN, bucket)
 
 
 def base_css(base):
@@ -317,7 +354,7 @@ def write_themes(base, themes_dir=None, colors=None):
         os.makedirs(gtk3, exist_ok=True)
         regel = ("/* Written by battctl (furios_battery). Deleted by "
                  "`battctl restore`. */\n"
-                 "phosh-battery-info image { color: %s; }\n" % farben[bucket])
+                 + RULE % {"farbe": farben[bucket]})
         with open(os.path.join(gtk3, "gtk.css"), "w") as fh:
             fh.write(_import(hell) + regel)
         dunkelziel = os.path.join(gtk3, "gtk-dark.css")
@@ -328,11 +365,17 @@ def write_themes(base, themes_dir=None, colors=None):
             # The base theme lost its dark sheet between two runs.
             os.unlink(dunkelziel)
         namen.append(name)
+    remove_themes(wurzel, ausser=namen)
     return namen
 
 
-def remove_themes(themes_dir=None):
-    """Take every theme of ours off the disk. Returns how many went."""
+def remove_themes(themes_dir=None, ausser=()):
+    """Take every theme of ours off the disk. Returns how many went.
+
+    `ausser` is what write_themes has just written: the same call clears out
+    what an older version of the rule left behind, so a phone does not
+    collect a directory per upgrade.
+    """
     wurzel = themes_dir or THEMES
     weg = 0
     try:
@@ -340,6 +383,8 @@ def remove_themes(themes_dir=None):
     except OSError:
         return 0
     for name in eintraege:
+        if name in ausser:
+            continue
         if base_name(name) == name:
             continue                      # not one of ours
         pfad = os.path.join(wurzel, name)
@@ -409,8 +454,8 @@ def describe(cfg=None, setting=None, base=None):
     mess = read_battery()
     jetzt = setting.get()
     basis = base or base_name(jetzt)
-    aktiv = jetzt != basis
-    bucket = wanted_bucket(mess, cfg, jetzt[len(basis) + len(MARK):] if aktiv else None)
+    zeigt = bucket_of(jetzt)
+    bucket = wanted_bucket(mess, cfg, zeigt)
     hell, _ = base_css(basis)
     return {
         "state": (mess or {}).get("status", "unknown"),
@@ -420,7 +465,7 @@ def describe(cfg=None, setting=None, base=None):
         "readable": mess is not None,
         "plausible": (mess or {}).get("plausible", False),
         "bucket": bucket or "none",
-        "showing": jetzt[len(basis) + len(MARK):] if aktiv else "none",
+        "showing": zeigt or "none",
         "theme": jetzt,
         "base_theme": basis,
         # A theme we cannot build on is the one failure that leaves everything
@@ -452,15 +497,16 @@ def cmd_status(argv):
     print("charging:     %s (green from %.1f W, amber from %.1f W)"
           % ("on" if cfg["charging"] else "off",
              cfg["charge_green_w"], cfg["charge_amber_w"]))
-    print("discharging:  %s (green to %.1f W, amber to %.1f W)"
+    print("discharging:  %s (white below %.1f W, amber from there, red "
+          "from %.1f W)"
           % ("on" if cfg["discharging"] else "off",
-             cfg["drain_green_w"], cfg["drain_amber_w"]))
+             cfg["drain_amber_w"], cfg["drain_red_w"]))
     return 0 if zustand["readable"] else 1
 
 
 # Which config keys `battctl config` will take, and how to read the value.
 SCHALTER = ("charging", "discharging")
-ZAHLEN = ("charge_green_w", "charge_amber_w", "drain_green_w", "drain_amber_w",
+ZAHLEN = ("charge_green_w", "charge_amber_w", "drain_amber_w", "drain_red_w",
           "dwell_s", "window_s", "hysteresis")
 
 
@@ -499,8 +545,8 @@ def cmd_config(argv):
     if cfg["charge_green_w"] <= cfg["charge_amber_w"]:
         print("charge_green_w must be above charge_amber_w.", file=sys.stderr)
         return 2
-    if cfg["drain_green_w"] >= cfg["drain_amber_w"]:
-        print("drain_green_w must be below drain_amber_w.", file=sys.stderr)
+    if cfg["drain_amber_w"] >= cfg["drain_red_w"]:
+        print("drain_amber_w must be below drain_red_w.", file=sys.stderr)
         return 2
     save_config(cfg)
     print("%s: %s" % (key, cfg[key]))
@@ -642,8 +688,8 @@ class Daemon:
             # Someone (a crash of ours, a second instance) left a colour on
             # that we are not tracking. Adopt it so hysteresis and dwell start
             # from what is on screen.
-            zeigt = jetzt[len(self.base) + len(MARK):] if jetzt != self.base else None
-            if zeigt in BUCKETS and self.showing is None:
+            zeigt = bucket_of(jetzt)
+            if zeigt is not None and self.showing is None:
                 self.showing = zeigt
         gemessen = self.sample(now, mess)
         if gemessen is None:
@@ -766,11 +812,110 @@ def cmd_daemon(_argv):
     return 0
 
 
+def quantil(werte, anteil):
+    if not werte:
+        return None
+    s = sorted(werte)
+    # Round half UP, not round(): Python rounds 4.5 to 4, and a quantile
+    # that quietly picks the lower neighbour at every .5 is a surprise in a
+    # number somebody sets a threshold from.
+    i = min(len(s) - 1, max(0, int(anteil * (len(s) - 1) + 0.5)))
+    return s[i]
+
+
+def cmd_watch(argv):
+    """Write down what the phone actually draws, so the thresholds are
+    measured rather than guessed.
+
+    The number that matters is the drain with the SCREEN ON: this icon is
+    only ever seen by somebody looking at the screen, so "normal" means
+    normal while in use, not the 0.2 W of a phone lying on a table. The rows
+    carry that state so the two can be told apart afterwards.
+    """
+    sekunden, abstand, ziel = 3600.0, 5.0, None
+    rest = list(argv)
+    while rest:
+        wort = rest.pop(0)
+        if wort in ("--csv", "-o") and rest:
+            ziel = rest.pop(0)
+        elif wort in ("--interval", "-i") and rest:
+            abstand = float(rest.pop(0))
+        else:
+            try:
+                sekunden = float(wort)
+            except ValueError:
+                print("Usage: battctl watch [seconds] [--interval s] "
+                      "[--csv file]", file=sys.stderr)
+                return 2
+
+    aus = open(ziel, "a") if ziel else None
+    kopf = "time,state,watt,percent,screen"
+    print(kopf, flush=True)
+    if aus and aus.tell() == 0:
+        aus.write(kopf + "\n")
+
+    proben = {"Charging": [], "Discharging": []}
+    ende = time.time() + sekunden
+    try:
+        while time.time() < ende:
+            mess = read_battery()
+            if mess and mess["plausible"]:
+                zeile = "%s,%s,%.3f,%s,%s" % (
+                    time.strftime("%Y-%m-%dT%H:%M:%S"), mess["status"],
+                    mess["watt"], _read("capacity") or "?", _screen_on())
+                print(zeile, flush=True)
+                if aus:
+                    aus.write(zeile + "\n")
+                    aus.flush()
+                proben.setdefault(mess["status"], []).append(mess["watt"])
+            time.sleep(abstand)
+    except KeyboardInterrupt:
+        print()
+    finally:
+        if aus:
+            aus.close()
+
+    for zustand in ("Discharging", "Charging"):
+        werte = proben.get(zustand) or []
+        if not werte:
+            continue
+        print("\n%s: %d readings" % (zustand, len(werte)))
+        for name, anteil in (("median", 0.5), ("p90", 0.9), ("p98", 0.98)):
+            print("  %-7s %5.2f W" % (name, quantil(werte, anteil)))
+        print("  %-7s %5.2f W" % ("max", max(werte)))
+        if zustand == "Discharging":
+            print("  A starting point: amber at p90, red at p98 - so that "
+                  "the ordinary tenth speaks and the rest stays white.")
+    return 0
+
+
+def _screen_on():
+    """Whether the display is lit, as well as it can be told here.
+
+    logind's IdleHint said "no" with the screen off, and the backlight LED
+    kept its last brightness, so neither is the answer on its own. What is
+    reliable is that a compositor with a dark panel still answers a frame
+    grab - but running grim once a sample is absurd. So this reports the
+    backlight value and lets whoever reads the log decide; "?" where there
+    is none.
+    """
+    for pfad in ("/sys/class/backlight/panel0-backlight/brightness",
+                 "/sys/class/leds/lcd-backlight/brightness"):
+        try:
+            with open(pfad) as fh:
+                return fh.read().strip()
+        except OSError:
+            continue
+    return "?"
+
+
 USAGE = """battctl - colour phosh's battery icon by charge power
 
   battctl status [--json]     what the battery is doing and which colour shows
   battctl config              every setting and its value
   battctl config <key> <val>  charging|discharging on|off, or a threshold in W
+  battctl watch [s] [--csv f] write down what the phone draws, to measure
+                              the thresholds instead of guessing them
   battctl daemon              the loop; this is what the service runs
   battctl reset               put the user's own theme back
   battctl restore             reset, plus remove the colour themes and config
@@ -788,7 +933,7 @@ def main(argv=None):
     befehl, rest = argv[0], argv[1:]
     for name, fn in (("status", cmd_status), ("config", cmd_config),
                      ("daemon", cmd_daemon), ("reset", cmd_reset),
-                     ("restore", cmd_restore)):
+                     ("restore", cmd_restore), ("watch", cmd_watch)):
         if befehl == name:
             return fn(rest)
     print("Unknown command: %s" % befehl, file=sys.stderr)
