@@ -82,38 +82,58 @@ BUCKETS = ("green", "amber", "red")
 # rule without the palette leaves the level in it. Naming a white would be
 # guessing at a foreground we cannot read.
 RULE_COLOR = "  color: %s;\n"
-RULE_PALETTE = ("  -gtk-icon-palette: success %(colour)s, warning %(colour)s,"
-                " error %(colour)s;\n")
+RULE_PALETTE = "  -gtk-icon-palette: %s;\n"
 RULE = "phosh-battery-info image {\n%s}\n"
 
+# Which of the two shapes the power colour lands on.
+#
+#   "c"  charging, and the icon has a bolt of its own: the BOLT takes the
+#        power colour and the frame stays in the colour of the bar.
+#   "d"  everything else: there is no bolt to colour, so the frame takes it.
+#
+# Two rules rather than one, because CSS cannot ask which icon is on screen.
+# The daemon knows, and the theme name carries the answer.
+KINDS = ("c", "d")
 
-def css_rule(power=None, level=None, colors=None):
+
+def css_rule(power=None, level=None, kind="d", colors=None):
     """The stylesheet for one combination, or "" when there is nothing to
-    say."""
-    colours = colors or COLORS
+    say.
+
+    The palette carries two statements: the filling (success, and error for
+    the low-level icons that draw it that way) and, on a charging icon of
+    ours, the bolt (warning). Absent declarations are how "no colour" is
+    said - naming a white would be guessing at a foreground we cannot read.
+    """
+    farben = colors or COLORS
     body = ""
-    if power:
-        body += RULE_COLOR % colours[power]
+    if power and kind == "d":
+        body += RULE_COLOR % farben[power]
+    parts = []
     if level:
-        body += RULE_PALETTE % {"colour": colours[level]}
+        # success and error, because the low-level icons draw their filling
+        # with the second one.
+        parts.append("success %s, error %s" % (farben[level], farben[level]))
+    if power and kind == "c":
+        parts.append("warning %s" % farben[power])
+    if parts:
+        # Only the halves that have something to say: a palette naming all
+        # three would paint the filling in the colour of the bolt whenever
+        # the level is fine - seen on the phone, an orange filling in a
+        # battery that was 84 % full.
+        body += RULE_PALETTE % ", ".join(parts)
     return RULE % body if body else ""
 
 
-# Four characters of the rule, carried in the theme name.
-#
-# Not decoration: GTK3 caches a named theme for the lifetime of the process,
-# by name, with no second look at the file. Change the rule and keep the
-# name, and phosh keeps serving the version it parsed at boot - the file on
-# disk is right, the icon is wrong, and nothing says why until the next
-# reboot. A name that changes with the rule is what makes an upgrade visible
-# the same minute.
-TOKEN = hashlib.sha1((RULE + RULE_COLOR + RULE_PALETTE).encode()).hexdigest()[:4]
+TOKEN = hashlib.sha1((RULE + RULE_COLOR + RULE_PALETTE
+                      + "".join(KINDS)).encode()).hexdigest()[:4]
 
 # Matches a name of ours - the current shape "<base>-batt<token>-<power>-
 # <level>" and the ones older versions wrote, which is what lets an upgrade
 # recognise its own leftovers instead of taking them for somebody's theme.
 MARK = re.compile(r"^(?P<base>.+)-batt[0-9a-f]{0,8}"
-                  r"-(?P<power>none|%s)(?:-(?P<level>none|%s))?$"
+                  r"-(?P<power>none|%s)(?:-(?P<level>none|%s))?"
+                  r"(?:-(?P<kind>[cd]))?$"
                   % ("|".join(BUCKETS), "|".join(BUCKETS)))
 
 DEFAULTS = {
@@ -176,7 +196,11 @@ ICON_DIRS = [os.path.expanduser("~/.icons"),
 # never recovers - measured on 15.9.2026, and there is no way to make phosh
 # re-read without restarting it. Switching the icon-theme setting always
 # rebuilds, so the theme is both how the icons arrive and how they leave.
-ICON_THEME = "furios-battery"
+# The name carries a fingerprint of what we generate, for the same reason
+# the GTK theme does: GTK caches an icon theme by name, so adding a file to
+# a theme that is already in use is invisible until the setting changes.
+# Measured: the bolt icons arrived and the shell went on drawing Adwaita's.
+ICON_THEME_BASE = "furios-battery"
 ICON_SETTING = "org.gnome.desktop.interface icon-theme"
 ICON_BASE = os.path.join(
     os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share")),
@@ -198,6 +222,15 @@ Context=Status
 ICON_MARK = "<!-- battctl (furios_misc): filling split off so it can be "
 ICON_MARK_FULL = (ICON_MARK + "coloured on its own. Remove with "
                   "`battctl restore`. -->")
+ICON_ANY = re.compile(r"^%s(?:-[0-9a-f]{4})?$" % re.escape(ICON_THEME_BASE))
+# The same for the bolt of the charging icons.
+BOLT_MARK = ("<!-- battctl (furios_misc): bolt split off so it can be "
+             "coloured apart from the frame. -->")
+# Four characters of what we generate, carried in the theme name.
+ICON_TOKEN = hashlib.sha1((ICON_MARK_FULL + BOLT_MARK
+                           + 'class="success" d="m 5 %d h 6 v %d h -6 z"'
+                           + 'class="warning"').encode()).hexdigest()[:4]
+ICON_THEME = "%s-%s" % (ICON_THEME_BASE, ICON_TOKEN)
 UPOWER_DEV = "/org/freedesktop/UPower/devices/battery_battery"
 
 # How urgent a colour is, for the case where only one of them fits.
@@ -279,6 +312,49 @@ def icon_base_theme(root_dir=None):
     return None
 
 
+def bolt_icon_svg(source_path):
+    """The charging icon with a bolt of its own, so it can be coloured
+    apart from the frame.
+
+    Adwaita draws frame and bolt as two subpaths of ONE path, and `color`
+    reaches both or neither. The bolt is the second subpath; the first ends
+    with `z`, so the current point is back at the path's own start (7,0)
+    and the bolt's relative "m 6 8" is the absolute (13,8). Checked against
+    all ten charging icons: identical structure in every one.
+
+    Rather than cutting the subpath out - which would mean rewriting
+    coordinates - an identical copy goes ON TOP, carrying class="warning".
+    The palette colours it from there.
+    """
+    try:
+        with open(source_path) as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    if BOLT_MARK in text:
+        return None
+    pfade = re.findall(r'<path[^>]*d="([^"]+)"', text)
+    if not pfade:
+        return None
+    fg = pfade[-1]
+    parts = [t.strip() for t in re.split(r"(?=[Mm]\s)", fg.strip()) if t.strip()]
+    if len(parts) < 2:
+        return None
+    start = re.match(r"m\s+(-?[\d.]+)\s+(-?[\d.]+)", parts[0])
+    bolt = re.match(r"m\s+(-?[\d.]+)\s+(-?[\d.]+)(.*)$", parts[1], re.S)
+    # Only where the assumption holds: the frame closes, so the bolt's
+    # relative start counts from the path's own beginning. Anywhere else
+    # this would put the bolt in the wrong place, and no colour at all is
+    # better than a magenta smear next to the battery.
+    if not start or not bolt or not parts[0].rstrip().endswith("z"):
+        return None
+    x = float(start.group(1)) + float(bolt.group(1))
+    y = float(start.group(2)) + float(bolt.group(2))
+    absolut = "M %g %g%s" % (x, y, bolt.group(3))
+    return text.replace("</svg>", '%s\n<path class="warning" d="%s" '
+                        'fill="#33d17a"/>\n</svg>' % (BOLT_MARK, absolut))
+
+
 def write_icon_theme(base="Adwaita", root_dir=None, source=None):
     """Write our icon theme: an index that inherits the user's own, and the
     discharge icons with a filling of their own. Returns the icon names."""
@@ -286,23 +362,28 @@ def write_icon_theme(base="Adwaita", root_dir=None, source=None):
     folder = icon_theme_dir(root_dir)
     target = os.path.join(folder, "symbolic", "status")
     written = []
-    for level in range(0, 101, 10):
-        name = "battery-level-%d-symbolic.svg" % level
-        new_text = split_icon_svg(os.path.join(source, name), level)
+    def lege_ab(name, new_text):
         if new_text is None:
-            continue
+            return
         os.makedirs(target, exist_ok=True)
         path = os.path.join(target, name)
         try:
             with open(path) as fh:
                 if fh.read() == new_text:
                     written.append(name)
-                    continue
+                    return
         except OSError:
             pass
         with open(path, "w") as fh:
             fh.write(new_text)
         written.append(name)
+
+    for level in range(0, 101, 10):
+        name = "battery-level-%d-symbolic.svg" % level
+        lege_ab(name, split_icon_svg(os.path.join(source, name), level))
+        # And the charging icons, for the bolt.
+        name = "battery-level-%d-charging-symbolic.svg" % level
+        lege_ab(name, bolt_icon_svg(os.path.join(source, name)))
     if not written:
         return []
     with open(os.path.join(folder, "index.theme"), "w") as fh:
@@ -310,13 +391,24 @@ def write_icon_theme(base="Adwaita", root_dir=None, source=None):
     return written
 
 
-def remove_icon_theme(root_dir=None):
+def stale_icon_themes(root_dir=None):
+    """Icon themes of ours from an older generation. Returns the names."""
+    root = root_dir or ICON_BASE
+    try:
+        entries = sorted(os.listdir(root))
+    except OSError:
+        return []
+    return [n for n in entries if ICON_ANY.match(n) and n != ICON_THEME]
+
+
+def remove_icon_theme(root_dir=None, name=None):
     """Take our icon theme off the disk. Returns how many files went.
 
     Only ours, and only if it is ours: a directory of that name without our
     marker in it was put there by somebody else and stays.
     """
-    folder = icon_theme_dir(root_dir)
+    folder = (os.path.join(root_dir or ICON_BASE, name) if name
+              else icon_theme_dir(root_dir))
     target = os.path.join(folder, "symbolic", "status")
     gone = 0
     try:
@@ -327,8 +419,9 @@ def remove_icon_theme(root_dir=None):
         path = os.path.join(target, name)
         try:
             with open(path) as fh:
-                if ICON_MARK not in fh.read():
-                    continue
+                inhalt = fh.read()
+            if ICON_MARK not in inhalt and BOLT_MARK not in inhalt:
+                continue
         except OSError:
             continue
         os.unlink(path)
@@ -347,6 +440,23 @@ def remove_icon_theme(root_dir=None):
                     except OSError:
                         pass
     return gone
+
+
+def icon_has_bolt(name):
+    """Does the icon on screen carry a bolt of its own to colour?
+
+    Only ours do - Adwaita draws frame and bolt in one path. Without one
+    the power colour has to go on the frame, or nothing would be coloured
+    at all while charging.
+    """
+    path = find_icon(name)
+    if not path:
+        return False
+    try:
+        with open(path) as fh:
+            return BOLT_MARK in fh.read()
+    except OSError:
+        return False
 
 
 def icon_is_split(name, charging=False):
@@ -622,8 +732,9 @@ def colours_of(name):
     return (weiche(treffer.group("power")), weiche(treffer.group("level")))
 
 
-def theme_name(base, power=None, level=None):
-    return "%s-batt%s-%s-%s" % (base, TOKEN, power or "none", level or "none")
+def theme_name(base, power=None, level=None, kind="d"):
+    return "%s-batt%s-%s-%s-%s" % (base, TOKEN, power or "none",
+                                   level or "none", kind)
 
 
 def base_css(base):
@@ -667,7 +778,8 @@ def _import(target):
     return '@import url("file://%s");\n' % target
 
 
-def write_theme(base, power=None, level=None, themes_dir=None, colors=None):
+def write_theme(base, power=None, level=None, kind="d", themes_dir=None,
+                colors=None):
     """Write the theme for one combination. Returns its name, or None.
 
     Written when it is needed rather than all twelve up front: most phones
@@ -678,27 +790,27 @@ def write_theme(base, power=None, level=None, themes_dir=None, colors=None):
     have been updated by a package - a stale copy of its name with a fresh
     stylesheet underneath is the kind of difference nobody would look for.
     """
-    rule = css_rule(power, level, colors)
+    rule = css_rule(power, level, kind, colors)
     if not rule:
         return None                       # nothing to say - that is the base
     light, dark = base_css(base)
     if light is None:
         return None
     root_dir = themes_dir or THEMES
-    name = theme_name(base, power, level)
+    name = theme_name(base, power, level, kind)
     gtk3 = os.path.join(root_dir, name, "gtk-3.0")
     os.makedirs(gtk3, exist_ok=True)
     header = ("/* Written by battctl (furios_misc). Deleted by "
             "`battctl restore`. */\n")
     with open(os.path.join(gtk3, "gtk.css"), "w") as fh:
         fh.write(_import(light) + header + rule)
-    dunkelziel = os.path.join(gtk3, "gtk-dark.css")
+    dark_target = os.path.join(gtk3, "gtk-dark.css")
     if dark:
-        with open(dunkelziel, "w") as fh:
+        with open(dark_target, "w") as fh:
             fh.write(_import(dark) + header + rule)
-    elif os.path.exists(dunkelziel):
+    elif os.path.exists(dark_target):
         # The base theme lost its dark sheet between two runs.
-        os.unlink(dunkelziel)
+        os.unlink(dark_target)
     return name
 
 
@@ -822,7 +934,8 @@ def use_icon_theme(setting=None, root_dir=None, source=None):
     """
     setting = setting or icon_setting()
     current = setting.get()
-    base = icon_base_theme(root_dir) if current == ICON_THEME else current
+    base = (icon_base_theme(root_dir) if ICON_ANY.match(current or "")
+            else current)
     if not write_icon_theme(base or "Adwaita", root_dir, source):
         return False
     if current != ICON_THEME:
@@ -839,7 +952,7 @@ def drop_icon_theme(setting=None, root_dir=None):
     """
     setting = setting or icon_setting()
     base = icon_base_theme(root_dir) or "Adwaita"
-    if setting.get() == ICON_THEME:
+    if ICON_ANY.match(setting.get() or ""):
         setting.set(base)
     return remove_icon_theme(root_dir)
 
@@ -864,6 +977,7 @@ def describe(cfg=None, setting=None, base=None):
                         (reading or {}).get("charging"))
     bucket = wanted_bucket(reading, cfg, zeigt, icon)
     split = icon_is_split(icon, (reading or {}).get("charging"))
+    on_bolt = bool((reading or {}).get("charging")) and icon_has_bolt(icon)
     del reported
     if not split:
         bucket = stand = merge_colours(bucket, stand)
@@ -884,6 +998,8 @@ def describe(cfg=None, setting=None, base=None):
         # Whether this icon has two halves to colour at all.
         "icon": icon or "?",
         "split_icon": split,
+        # Which shape the power colour lands on.
+        "power_on": "bolt" if on_bolt else "frame",
         # False while the kernel and UPower disagree about the direction.
         "sources_agree": agree,
         "theme": current,
@@ -907,8 +1023,10 @@ def cmd_status(argv):
               % (state["watt"], state["ampere"], state["volt"]))
     else:
         print("power:        not readable (%s)" % SYSFS)
-    print("shell:        %s (would be %s)"
-          % (state["showing"], state["bucket"]))
+    print("%-13s %s (would be %s)%s"
+          % (state["power_on"] + ":", state["showing"], state["bucket"],
+             "" if state["power_on"] == "bolt"
+             else " - the icon on screen has no bolt of its own"))
     print("filling:      %s (would be %s) at %s %%"
           % (state["level_showing"], state["level_bucket"],
              "?" if state["percent"] is None else int(state["percent"])))
@@ -1028,11 +1146,15 @@ class Daemon:
     def __init__(self, cfg=None, setting=None, current=None):
         self.cfg = cfg or load_config()
         self.setting = setting or Setting()
-        self.samples = []                 # (Zeitpunkt, Watt, charging_)
-        # (shell, filling) - the names of the colours, not of the theme
+        self.samples = []                 # (when, watts, charging)
+        # (power, filling) - the names of the colours, not of the theme
         self.showing = (None, None)
+        # Which shape the power colour is on, and which it should be on:
+        # "c" the bolt of a charging icon, "d" the frame.
+        self.kind_showing = "d"
+        self.kind = "d"
         self.last_change = 0.0
-        self.last_good = 0.0              # wann zuletzt something Brauchbares kam
+        self.last_good = 0.0              # when something usable last arrived
         self.cfg_stamp = self._stamp()
         # The icon name UPower publishes, kept up to date by whoever drives
         # the loop. Used for ONE thing: telling whether UPower and the
@@ -1065,9 +1187,9 @@ class Daemon:
         self.cfg = load_config()
         return True
 
-    def ensure_theme(self, power, level):
-        """The theme for one pair, written if it is not there yet."""
-        return write_theme(self.base, power, level)
+    def ensure_theme(self, power, level, kind="d"):
+        """The theme for one combination, written if it is not there yet."""
+        return write_theme(self.base, power, level, kind)
 
     def adopt(self, name):
         """Somebody changed the theme while we were running.
@@ -1113,29 +1235,32 @@ class Daemon:
         smoothed["watt"] = middle
         return wanted_bucket(smoothed, self.cfg, self.showing[0], self.icon)
 
-    def apply(self, paar, now=None):
-        """Set the theme for (shell colour, filling colour).
+    def apply(self, pair, now=None, kind=None):
+        """Set the theme for (power colour, filling colour).
 
         Returns True when the setting was written. One pair, one theme: the
-        two halves of the icon live in the same stylesheet, so a change to
-        either is one switch, not two.
+        halves of the icon live in the same stylesheet, so a change to any
+        of them is one switch, not two. `kind` says which shape the power
+        colour lands on - the bolt of a charging icon, or the frame.
         """
         now = time.time() if now is None else now
-        paar = tuple(paar)
-        if paar == self.showing:
+        pair = tuple(pair)
+        kind = self.kind if kind is None else kind
+        if pair == self.showing and kind == self.kind_showing:
             return False
         if (self.showing != (None, None)
                 and now - self.last_change < self.cfg["dwell_s"]):
             return False
-        if paar == (None, None):
+        if pair == (None, None):
             target = self.base
         else:
-            target = self.ensure_theme(*paar)
+            target = self.ensure_theme(pair[0], pair[1], kind)
             if target is None:
                 return False
         if not self.setting.set(target):
             return False
-        self.showing = paar
+        self.showing = pair
+        self.kind_showing = kind
         self.last_change = now
         return True
 
@@ -1167,12 +1292,15 @@ class Daemon:
         shell = self.decide(measured, now)
         filling = wanted_level(measured, self.cfg, self.showing[1])
         drawn = phosh_icon(measured.get("percent"), measured["charging"])
+        # Where the power colour goes: onto the bolt while charging, if the
+        # icon on screen has one of its own; onto the frame otherwise.
+        self.kind = "c" if (measured["charging"] and icon_has_bolt(drawn)) else "d"
         if not icon_is_split(drawn, measured["charging"]):
             # One shape, one colour. Saying both would mean the filling
             # silently overwriting the shell, or the other way round -
             # instead the more urgent of the two speaks for the whole icon.
             shell = filling = merge_colours(shell, filling)
-        return self.apply((shell, filling), now)
+        return self.apply((shell, filling), now, self.kind)
 
 
 def cmd_daemon(_argv):
@@ -1217,6 +1345,8 @@ def cmd_daemon(_argv):
     # battery too. Identical to Adwaita's until something sets the palette,
     # and only in this user's icon directory.
     if daemon.cfg["level"]:
+        for old in stale_icon_themes():
+            remove_icon_theme(name=old)
         if use_icon_theme():
             print("icon theme %s in use - the discharge icons have a "
                   "filling of their own" % ICON_THEME, flush=True)

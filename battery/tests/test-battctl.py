@@ -56,9 +56,9 @@ class Base(unittest.TestCase):
         self.old_paths = (b.SYSFS, b.CONFIG, b.THEMES, list(b.THEME_DIRS),
                     b.ICON_BASE, b.ICON_SOURCE, list(b.ICON_DIRS))
         self.alter_pfad = os.environ["PATH"]
-        self.ikonen = os.path.join(self.tmp, "icons")
-        b.ICON_BASE = self.ikonen
-        b.ICON_DIRS[:] = [self.ikonen]
+        self.icon_root = os.path.join(self.tmp, "icons")
+        b.ICON_BASE = self.icon_root
+        b.ICON_DIRS[:] = [self.icon_root]
         self.icon_setting = os.path.join(self.tmp, "icon-theme")
         with open(self.icon_setting, "w") as fh:
             fh.write("Adwaita\n")
@@ -102,12 +102,21 @@ class Base(unittest.TestCase):
             fh.write(name + "\n")
 
     def alle_themes(self, base="base"):
-        """Die drei Huellenfarben, wie sie frueher write_themes schrieb."""
+        """The three power colours, as write_themes used to write them."""
         return [b.write_theme(base, colour, None) for colour in b.BUCKETS]
+
+    def icon_with_bolt(self, name):
+        """An icon in the search path whose bolt is a path of its own."""
+        folder = os.path.join(self.icon_root, "Adwaita", "symbolic", "status")
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, name + ".svg"), "w") as fh:
+            fh.write('<svg>%s<path class="warning" d="M 13 8"/>'
+                     '<path class="success" d="m 5 7"/>'
+                     '<path d="m 7 0"/></svg>' % b.BOLT_MARK)
 
     def icon_with_two_areas(self, name):
         """An icon in the search path that has a filling area of its own."""
-        folder = os.path.join(self.ikonen, "Adwaita", "symbolic", "status")
+        folder = os.path.join(self.icon_root, "Adwaita", "symbolic", "status")
         os.makedirs(folder, exist_ok=True)
         with open(os.path.join(folder, name + ".svg"), "w") as fh:
             fh.write('<svg><path class="success" d="m 5 7"/>'
@@ -584,9 +593,12 @@ class Names(Base):
 
     def test_building_a_name(self):
         self.assertEqual(b.theme_name("adw-gtk3", "amber"),
-                         "adw-gtk3-batt%s-amber-none" % b.TOKEN)
+                         "adw-gtk3-batt%s-amber-none-d" % b.TOKEN)
         self.assertEqual(b.theme_name("adw-gtk3", None, "red"),
-                         "adw-gtk3-batt%s-none-red" % b.TOKEN)
+                         "adw-gtk3-batt%s-none-red-d" % b.TOKEN)
+        # The third part says which shape the power colour lands on.
+        self.assertEqual(b.theme_name("adw-gtk3", "red", "amber", "c"),
+                         "adw-gtk3-batt%s-red-amber-c" % b.TOKEN)
         # Both halves are independent, and the name says both.
         self.assertEqual(b.colours_of(b.theme_name("adw-gtk3", "green", "red")),
                          ("green", "red"))
@@ -630,10 +642,12 @@ class Themes(Base):
                                    b.theme_name("base", "red", "amber"),
                                    "gtk-3.0", "gtk.css")).read()
         self.assertIn("color: %s;" % b.COLORS["red"], body)
-        # All three palette names, because below 20 % the filling is warning
-        # and error rather than success.
-        for name in ("success", "warning", "error"):
+        # success AND error, because the low-level icons draw their filling
+        # with the second one. warning belongs to the bolt and must not
+        # take the filling colour - an 84 %% battery went orange that way.
+        for name in ("success", "error"):
             self.assertIn("%s %s" % (name, b.COLORS["amber"]), body)
+        self.assertNotIn("warning", body)
 
     def test_what_says_nothing_is_not_written(self):
         """"No colour" is said by leaving the declaration out - naming a
@@ -916,7 +930,7 @@ class Commands(Base):
         self.make_theme("base")
         self.set_theme(b.theme_name("base", "green"))
         _, out, _ = self.run_cmd("status")
-        self.assertIn("shell:        green", out)
+        self.assertIn("frame:        green", out)
         self.assertIn("base theme:   base", out)
 
     def test_config_shows_everything(self):
@@ -1423,6 +1437,40 @@ class TheLoop(Base):
         self.battery(status="Discharging", ampere=1.2, volt=3.9, percent=9)
         self.d.tick(now=1050)
         self.assertEqual(self.d.showing[1], "red")
+
+    def test_while_charging_the_bolt_takes_the_power_colour(self):
+        """Asked for: on a charging icon only the bolt says how fast, and
+        the frame stays in the colour of the bar."""
+        # One file, both areas - the second helper would overwrite the
+        # first and take the bolt away again.
+        self.icon_with_bolt("battery-level-80-charging-symbolic")
+        self.battery(ampere=1.2, volt=4.3, percent=80)      # 5.16 W: amber
+        self.d.tick(now=1000)
+        self.assertEqual(self.d.kind, "c")
+        self.assertTrue(b.Setting().get().endswith("-amber-none-c"))
+        rule = open(os.path.join(self.themes, b.Setting().get(),
+                                 "gtk-3.0", "gtk.css")).read()
+        self.assertNotIn("  color:", rule)
+        self.assertIn("warning %s" % b.COLORS["amber"], rule)
+
+    def test_without_a_bolt_of_its_own_the_frame_takes_it(self):
+        """Where our icon theme is not in use there is nothing to colour
+        but the frame - and one colour is better than none."""
+        self.icon_with_two_areas("battery-level-80-charging-symbolic")
+        self.battery(ampere=1.2, volt=4.3, percent=80)
+        self.d.tick(now=1000)
+        self.assertEqual(self.d.kind, "d")
+        self.assertTrue(b.Setting().get().endswith("-amber-none-d"))
+
+    def test_on_battery_the_frame_takes_it(self):
+        self.d.cfg["discharging"] = True
+        self.icon_with_two_areas("battery-level-80-symbolic")
+        self.battery(status="Discharging", ampere=1.6, volt=3.9, percent=80)
+        self.d.tick(now=1000)
+        self.assertEqual(self.d.kind, "d")
+        rule = open(os.path.join(self.themes, b.Setting().get(),
+                                 "gtk-3.0", "gtk.css")).read()
+        self.assertIn("  color: %s" % b.COLORS["red"], rule)
 
     def test_setting_can_fail(self):
         class Stur(b.Setting):

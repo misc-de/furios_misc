@@ -198,6 +198,42 @@ that is not fussiness.
 differently. Asking the wrong one gives the wrong answer to "does this icon
 have two areas".
 
+## 5e · The bolt, on its own
+
+Asked for on 15.9. in the evening: while charging, colour only the bolt and
+leave the frame alone. Adwaita does not allow that either - frame and bolt
+are two subpaths of ONE path, and `color` reaches both or neither.
+
+The bolt is the second subpath. The first ends with `z`, so the current
+point is back at the path's own start (7,0) and the bolt's relative
+"m 6 8" is the absolute (13,8). Checked against all ten charging icons:
+identical structure in every one - same start, same closing `z`, same
+delta. Where that does not hold, no bolt is generated: a misplaced copy
+would be a magenta smear next to the battery, and no colour is better than
+that.
+
+The copy carries `class="warning"`, which is free in the charging icons -
+they use only `success`, for the filling. So the three areas map onto the
+three levers GTK has:
+
+| area | comes from |
+|---|---|
+| frame | `color` |
+| filling | palette `success`, and `error` for the low-level icons |
+| bolt | palette `warning` (our copies only) |
+
+Two things that went wrong in the first attempt, both visible in one
+screenshot of an 84 % battery: the **filling** went orange instead of the
+bolt, because the palette named all three entries and the half that had
+nothing to say repeated the one that did; and the **bolt stayed white**,
+because the icon theme had not changed its name - GTK caches an icon theme
+the way it caches a GTK theme, so the new files were invisible until the
+name carried a fingerprint of its own (`furios-battery-f8ba`).
+
+Where our copies are not in use, the power colour goes back on the frame:
+one colour is better than none, and the daemon can tell the difference by
+reading the file it knows phosh will draw.
+
 ## 5d · The kernel and UPower contradict each other
 
 Measured on 15.9. while the charger was playing up:

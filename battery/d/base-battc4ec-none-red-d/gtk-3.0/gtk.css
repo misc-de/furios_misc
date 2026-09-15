@@ -1,0 +1,5 @@
+@import url("file:///tmp/tmpyf8jaq9v/themes/base/gtk-3.0/gtk.css");
+/* Written by battctl (furios_misc). Deleted by `battctl restore`. */
+phosh-battery-info image {
+  -gtk-icon-palette: success #e01b24, error #e01b24, warning #e01b24;
+}

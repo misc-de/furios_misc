@@ -9,12 +9,17 @@ The icon has two parts, and from now on they say two different things:
 
 | | what it says | |
 |---|---|---|
-| **frame and bolt** | how fast the battery is moving | green · amber · red |
-| **filling** | how full it is | plain · amber · red |
+| **the bolt**, while charging | how fast the battery is filling | green · amber · red |
+| **the frame**, on battery | how much is being drawn | plain · amber · red |
+| **the filling**, always | how full it is | plain · amber · red |
 
 So: **green** when a lot is going in, **amber** in between, **red** when
 hardly anything is moving — and the filling inside takes colour independently
 of that when the charge level runs short.
+
+While charging the power colour goes on the **bolt** alone, because there is
+a bolt to carry it and the frame is then free to stay out of the way. On
+battery there is no bolt, so the frame takes it.
 
 ![The states](doc/states.png)
 
@@ -31,12 +36,18 @@ between charging and discharging. The frame does **not** follow that: it
 stays plain as long as the readings of one minute do not agree about the
 direction. Otherwise the colour would be an indicator of the cable.
 
-For this to work on battery at all, `battctl` brings an **icon theme** of its
-own: Adwaita draws the discharge battery as ONE path with the level inside
-it, and no CSS reaches that alone. The theme `furios-battery` inherits the
-user's own theme and replaces only eight files with versions that have a
-filling area of their own; it lives under `~/.local/share/icons` and goes
-away again with `battctl restore`.
+For this to work at all, `battctl` brings an **icon theme** of its own:
+Adwaita draws the discharge battery as ONE path with the level inside it,
+and frame and bolt of the charging battery as one path as well - no CSS
+reaches either alone. The theme inherits the user's own theme and replaces
+eighteen files with versions whose filling, and whose bolt, are paths of
+their own; it lives under `~/.local/share/icons` and goes away again with
+`battctl restore`.
+
+Its name carries a fingerprint too (`furios-battery-f8ba`), for the same
+reason the GTK theme does: GTK caches an icon theme by name, so a file added
+to a theme already in use stays invisible. Measured, while building this:
+the bolt icons arrived and the shell went on drawing Adwaita's.
 
 A theme, and not a few files in `~/.local/share/icons/Adwaita`: that would be
 the shorter way and it has a trap. GTK remembers where it found an icon; when
@@ -66,19 +77,20 @@ line of CSS colours it:
 
 ```css
 phosh-battery-info image {
-  color: #e01b24;                                  /* frame: 1 W going in  */
-  -gtk-icon-palette: success #ff7800, warning #ff7800, error #ff7800;
-}                                                  /* filling: below 60 %  */
+  -gtk-icon-palette: success #ff7800, error #ff7800,   /* filling: < 60 %  */
+                     warning #e01b24;                  /* bolt: 1 W in     */
+}
 ```
 
-Two declarations, because the icon consists of **two paths**: frame and bolt
-follow `color`, the filling carries `class="success"` in the Adwaita SVG and
-comes from the symbolic palette. Without the second line the filling stays
-white inside a red battery.
+The icon has up to three areas, and GTK can address them separately:
+`color` reaches everything without a class, `success` and `error` the
+filling (the low-level icons draw it with the second one), and `warning` the
+bolt - the last one only in our own copies, because Adwaita draws frame and
+bolt together.
 
-All three palette names get the same colour, because below 20 % the filling
-is called `warning` or `error` — the colour should come from the charge
-level and not from which file phosh happened to pick.
+Only the halves that have something to say appear. A palette that named all
+three would paint the filling in the colour of the bolt whenever the level
+is fine - an 84 % battery went orange that way, on the phone, once.
 
 Where one of the two statements is absent, the line is absent: a rule without
 `color` leaves the frame in the colour of the bar, one without the palette
@@ -123,8 +135,8 @@ carries the colour over.
 
 | | plain | green | amber | red |
 |---|---|---|---|---|
-| frame, charging | — | from 7 W | from 3 W | below that |
-| frame, on battery | below 3 W | — | from 3 W | from 5 W |
+| bolt, charging | — | from 7 W | from 3 W | below that |
+| frame, on battery | below 2 W | — | from 2 W | from 4 W |
 | filling | above 60 % | — | below 60 % | below 15 % |
 
 On battery, **plain is the normal case**: a phone doing what a phone does
@@ -192,5 +204,5 @@ tests/run-tests.sh      # no display, no battery, no root - NEVER with sudo
 tests/coverage.sh
 ```
 
-156 tests, 89.6 % of the lines. What is missing is the D-Bus wiring of the
+159 tests, 88.0 % of the lines. What is missing is the D-Bus wiring of the
 daemon — that is proven on the device, not simulated (FINDINGS.md).

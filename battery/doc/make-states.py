@@ -47,13 +47,28 @@ def rgba(colour):
     return value
 
 
-def icon(name, shell, filling):
-    """The icon as GTK draws it with these two colours."""
+def icon(name, power, filling):
+    """The icon as GTK draws it with these colours.
+
+    Where the icon has a bolt of its own - the charging ones battctl
+    generates - the power colour goes on the bolt and the frame stays in
+    the colour of the bar. Everywhere else it goes on the frame, which is
+    what the phone does too.
+    """
     info = Gtk.IconTheme.get_default().lookup_icon(
         name, ICON_PX, Gtk.IconLookupFlags.FORCE_SYMBOLIC)
-    front = rgba(b.COLORS.get(shell, FG))
+    with_bolt = False
+    try:
+        with open(info.get_filename()) as fh:
+            with_bolt = b.BOLT_MARK in fh.read()
+    except (OSError, TypeError):
+        pass
     inside = rgba(b.COLORS.get(filling, FG))
-    pixbuf, _was_symbolic = info.load_symbolic(front, inside, inside, inside)
+    if with_bolt and power:
+        front, bolt = rgba(FG), rgba(b.COLORS[power])
+    else:
+        front, bolt = rgba(b.COLORS.get(power, FG)), inside
+    pixbuf, _was_symbolic = info.load_symbolic(front, inside, bolt, inside)
     return pixbuf
 
 
@@ -65,7 +80,7 @@ def icon(name, shell, filling):
 # instead of two, and the chart thereby tells the truth about the phone it
 # was drawn on.
 CHART = [
-    ("Charging - the frame says how fast", [
+    ("Charging - the bolt says how fast", [
         ("battery-level-80-charging-symbolic", "green", None, "from 7 W"),
         ("battery-level-80-charging-symbolic", "amber", None, "3-7 W"),
         ("battery-level-80-charging-symbolic", "red", None, "below 3 W"),
