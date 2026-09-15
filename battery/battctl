@@ -1175,6 +1175,128 @@ def cmd_watch(argv):
     return 0
 
 
+def read_log(pfad):
+    """The rows of a `battctl watch` log. Returns (zeilen, fehler)."""
+    try:
+        with open(pfad) as fh:
+            roh = fh.read().splitlines()
+    except OSError as fehler:
+        return [], str(fehler)
+    zeilen = []
+    for zeile in roh:
+        teile = zeile.split(",")
+        if len(teile) < 5 or teile[0] == "time":
+            continue                      # Kopfzeile, oder abgeschnitten
+        try:
+            watt = float(teile[2])
+        except ValueError:
+            continue
+        try:
+            licht = int(teile[4])
+        except ValueError:
+            licht = None
+        zeilen.append({"zeit": teile[0], "state": teile[1], "watt": watt,
+                       "percent": teile[3], "screen": licht})
+    if not zeilen:
+        return [], "no readings in " + pfad
+    return zeilen, None
+
+
+def summarise(zeilen):
+    """Quantile je Zustand, und fuer das Entladen getrennt nach Bildschirm.
+
+    Getrennt, weil nur die eine Haelfte die Schwellen bestimmt: dieses
+    Symbol sieht nur, wer auf den Bildschirm schaut. Die Ruhelast eines
+    Telefons auf dem Tisch ist eine andere Zahl und gehoert nicht in
+    dieselbe Verteilung.
+    """
+    gruppen = {}
+    for zeile in zeilen:
+        schluessel = zeile["state"]
+        gruppen.setdefault(schluessel, []).append(zeile["watt"])
+        if zeile["state"] == "Discharging" and zeile["screen"] is not None:
+            wohin = "Discharging, screen on" if zeile["screen"] > 0 \
+                else "Discharging, screen off"
+            gruppen.setdefault(wohin, []).append(zeile["watt"])
+    wechsel, vorher = 0, None
+    for zeile in zeilen:
+        if vorher is not None and zeile["state"] != vorher:
+            wechsel += 1
+        vorher = zeile["state"]
+    return gruppen, wechsel
+
+
+def suggestion(werte):
+    """Amber at p90, red at p98, to a tenth of a watt.
+
+    So that the unusual tenth speaks and the rest stays plain. Returns
+    None when the two would land on the same number - then there is not
+    enough spread in the data to tell "unusual" from "ordinary".
+    """
+    if len(werte) < 30:
+        return None
+    gelb = round(quantil(werte, 0.9), 1)
+    rot = round(quantil(werte, 0.98), 1)
+    if gelb <= 0 or rot <= gelb:
+        return None
+    return gelb, rot
+
+
+def cmd_summarise(argv):
+    pfad, anwenden = None, False
+    for wort in argv:
+        if wort == "--apply":
+            anwenden = True
+        elif not wort.startswith("-") and pfad is None:
+            pfad = wort
+        else:
+            print("Usage: battctl summarise <log.csv> [--apply]",
+                  file=sys.stderr)
+            return 2
+    if pfad is None:
+        print("Usage: battctl summarise <log.csv> [--apply]", file=sys.stderr)
+        return 2
+
+    zeilen, fehler = read_log(pfad)
+    if fehler:
+        print(fehler, file=sys.stderr)
+        return 1
+    gruppen, wechsel = summarise(zeilen)
+
+    print("%d readings, %s to %s"
+          % (len(zeilen), zeilen[0]["zeit"], zeilen[-1]["zeit"]))
+    if wechsel:
+        print("direction changed %d times - a charging figure from this is "
+              "not a baseline" % wechsel)
+    for name in sorted(gruppen):
+        werte = gruppen[name]
+        print("\n%s: %d readings" % (name, len(werte)))
+        for wort, anteil in (("median", 0.5), ("p90", 0.9), ("p98", 0.98)):
+            print("  %-7s %5.2f W" % (wort, quantil(werte, anteil)))
+        print("  %-7s %5.2f W" % ("max", max(werte)))
+
+    # The thresholds come from the screen-on half, and from nothing else.
+    massgeblich = gruppen.get("Discharging, screen on") or []
+    vorschlag = suggestion(massgeblich)
+    print()
+    if vorschlag is None:
+        print("Not enough to set a threshold from: %d readings with the "
+              "screen on. Use the phone on battery for a while and run the "
+              "log again." % len(massgeblich))
+        return 1
+    gelb, rot = vorschlag
+    print("Suggested: drain_amber_w %.1f (p90), drain_red_w %.1f (p98)"
+          % (gelb, rot))
+    if not anwenden:
+        print("Apply with: battctl summarise %s --apply" % pfad)
+        return 0
+    cfg = load_config()
+    cfg["drain_amber_w"], cfg["drain_red_w"] = gelb, rot
+    save_config(cfg)
+    print("Set. The daemon picks the file up on its own.")
+    return 0
+
+
 def _screen_on():
     """Whether the display is lit, as well as it can be told here.
 
@@ -1202,6 +1324,8 @@ USAGE = """battctl - colour phosh's battery icon by charge power
   battctl config <key> <val>  charging|discharging on|off, or a threshold in W
   battctl watch [s] [--csv f] write down what the phone draws, to measure
                               the thresholds instead of guessing them
+  battctl summarise <csv>     what a watch log says, and the thresholds it
+                              suggests; --apply writes them
   battctl daemon              the loop; this is what the service runs
   battctl reset               put the user's own theme back
   battctl restore             reset, plus remove the colour themes and config
@@ -1219,7 +1343,8 @@ def main(argv=None):
     befehl, rest = argv[0], argv[1:]
     for name, fn in (("status", cmd_status), ("config", cmd_config),
                      ("daemon", cmd_daemon), ("reset", cmd_reset),
-                     ("restore", cmd_restore), ("watch", cmd_watch)):
+                     ("restore", cmd_restore), ("watch", cmd_watch),
+                     ("summarise", cmd_summarise), ("summarize", cmd_summarise)):
         if befehl == name:
             return fn(rest)
     print("Unknown command: %s" % befehl, file=sys.stderr)

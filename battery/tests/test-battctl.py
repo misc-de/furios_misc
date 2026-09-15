@@ -887,6 +887,104 @@ class Mitschnitt(Basis):
         self.assertEqual(rc, 0)
         self.assertNotIn("Discharging:", aus)
 
+    # -------------------------------------------------- Auswertung
+
+    def log(self, zeilen):
+        pfad = os.path.join(self.tmp, "log.csv")
+        with open(pfad, "w") as fh:
+            fh.write("time,state,watt,percent,screen\n")
+            for i, (zustand, watt, licht) in enumerate(zeilen):
+                fh.write("2026-09-15T12:%02d:00,%s,%.3f,80,%s\n"
+                         % (i % 60, zustand, watt, licht))
+        return pfad
+
+    def test_liest_ueber_kaputte_zeilen_hinweg(self):
+        pfad = self.log([("Discharging", 1.0, 100)])
+        with open(pfad, "a") as fh:
+            fh.write("abgeschnitten\n2026,Discharging,keine-zahl,80,100\n")
+        zeilen, fehler = b.read_log(pfad)
+        self.assertIsNone(fehler)
+        self.assertEqual(len(zeilen), 1)
+
+    def test_eine_fehlende_datei_ist_ein_satz_kein_absturz(self):
+        zeilen, fehler = b.read_log(os.path.join(self.tmp, "gibts-nicht"))
+        self.assertEqual([], zeilen)
+        self.assertIn("gibts-nicht", fehler)
+
+    def test_leeres_log(self):
+        pfad = self.log([])
+        _zeilen, fehler = b.read_log(pfad)
+        self.assertIn("no readings", fehler)
+
+    def test_bildschirm_an_und_aus_sind_zwei_verteilungen(self):
+        """Nur die eine bestimmt die Schwellen: dieses Symbol sieht nur,
+        wer auf den Bildschirm schaut."""
+        zeilen, _ = b.read_log(self.log(
+            [("Discharging", 0.2, 0)] * 10 + [("Discharging", 3.0, 800)] * 10))
+        gruppen, _wechsel = b.summarise(zeilen)
+        self.assertEqual(len(gruppen["Discharging"]), 20)
+        self.assertEqual(len(gruppen["Discharging, screen off"]), 10)
+        self.assertEqual(b.quantil(gruppen["Discharging, screen on"], 0.5), 3.0)
+
+    def test_richtungswechsel_werden_gezaehlt(self):
+        zeilen, _ = b.read_log(self.log(
+            [("Charging", 1.0, 100), ("Discharging", 1.0, 100),
+             ("Discharging", 1.0, 100), ("Charging", 1.0, 100)]))
+        self.assertEqual(b.summarise(zeilen)[1], 2)
+
+    def test_der_vorschlag_braucht_genug_messungen(self):
+        self.assertIsNone(b.suggestion([1.0] * 29))
+        self.assertIsNone(b.suggestion([]))
+
+    def test_und_genug_streuung(self):
+        """All the same number means there is no "unusual" to find."""
+        self.assertIsNone(b.suggestion([2.0] * 50))
+
+    def test_der_vorschlag_ist_p90_und_p98(self):
+        # Neunzig gewoehnliche Messungen, neun geschaeftige, eine Spitze.
+        werte = [1.0] * 90 + [5.0] * 9 + [9.0]
+        self.assertEqual(b.suggestion(werte), (1.0, 5.0))
+
+    def test_summarise_nennt_beides_und_schreibt_nichts(self):
+        pfad = self.log([("Discharging", 1.0, 700)] * 90
+                        + [("Discharging", 5.0, 700)] * 9
+                        + [("Discharging", 9.0, 700)])
+        rc, aus, _ = self.run_cmd("summarise", pfad)
+        self.assertEqual(rc, 0)
+        self.assertIn("Suggested: drain_amber_w 1.0", aus)
+        self.assertIn("drain_red_w 5.0", aus)
+        self.assertEqual(b.load_config()["drain_amber_w"],
+                         b.DEFAULTS["drain_amber_w"])
+
+    def test_erst_mit_apply_werden_sie_gesetzt(self):
+        pfad = self.log([("Discharging", 1.0, 700)] * 90
+                        + [("Discharging", 5.0, 700)] * 9
+                        + [("Discharging", 9.0, 700)])
+        rc, aus, _ = self.run_cmd("summarise", pfad, "--apply")
+        self.assertEqual(rc, 0)
+        self.assertIn("Set.", aus)
+        cfg = b.load_config()
+        self.assertEqual(cfg["drain_amber_w"], 1.0)
+        self.assertEqual(cfg["drain_red_w"], 5.0)
+
+    def test_zu_wenige_messungen_setzen_nichts(self):
+        pfad = self.log([("Discharging", 1.0, 700)] * 5)
+        rc, aus, _ = self.run_cmd("summarise", pfad, "--apply")
+        self.assertEqual(rc, 1)
+        self.assertIn("Not enough", aus)
+        self.assertEqual(b.load_config()["drain_amber_w"],
+                         b.DEFAULTS["drain_amber_w"])
+
+    def test_summarise_ohne_pfad(self):
+        for argv in (("summarise",), ("summarise", "--wat", "x")):
+            rc, _, err = self.run_cmd(*argv)
+            self.assertEqual(rc, 2)
+            self.assertIn("Usage", err)
+
+    def test_summarise_liest_auch_die_amerikanische_schreibweise(self):
+        pfad = self.log([("Discharging", 1.0, 700)])
+        self.assertEqual(self.run_cmd("summarize", pfad)[0], 1)
+
     def test_unsinnige_argumente(self):
         rc, _, err = self.run_cmd("watch", "vielleicht")
         self.assertEqual(rc, 2)

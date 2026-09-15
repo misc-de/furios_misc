@@ -124,9 +124,20 @@ gibt es `battctl watch`:
 battctl watch 3600 --csv ~/verbrauch.csv     # eine Stunde mitschreiben
 ```
 
-Am Ende stehen Median, p90, p98 und Maximum, getrennt nach Laden und
-Entladen. Ein brauchbarer Anfang ist **orange bei p90, rot bei p98**: dann
-meldet sich das gewoehnliche Zehntel und der Rest bleibt weiss.
+…und `battctl summarise`, das eine solche Mitschrift auswertet:
+
+```
+battctl summarise ~/verbrauch.csv            # was drinsteht und was es vorschlaegt
+battctl summarise ~/verbrauch.csv --apply    # und setzt es
+```
+
+Es trennt dabei nach Zustand UND nach Bildschirm, und die Schwellen kommen
+**nur aus der Haelfte mit eingeschaltetem Bildschirm**: dieses Symbol sieht
+nur, wer hinschaut, also ist „normal" das, was das Telefon im Gebrauch
+zieht. Vorgeschlagen wird **orange bei p90, rot bei p98** — dann meldet sich
+das ungewoehnliche Zehntel und der Rest bleibt schlicht. Unter 30 Messungen
+mit Bildschirm an, oder wenn p90 und p98 auf derselben Zahl landen, setzt es
+nichts und sagt warum.
 
 Wichtig dabei: fuer den Akkubetrieb zaehlt der Verbrauch mit **einge-
 schaltetem Bildschirm**. Dieses Symbol sieht nur, wer auf den Bildschirm
@@ -169,5 +180,5 @@ tests/run-tests.sh      # ohne Display, ohne Akku, ohne root - NIE mit sudo
 tests/coverage.sh
 ```
 
-127 Tests, 89,3 % der Zeilen. Was fehlt, ist die D-Bus-Verdrahtung des Daemons
+140 Tests, 89,8 % der Zeilen. Was fehlt, ist die D-Bus-Verdrahtung des Daemons
 — die wird am Geraet belegt, nicht simuliert (FINDINGS.md).
