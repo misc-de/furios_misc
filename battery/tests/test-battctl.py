@@ -850,6 +850,38 @@ class Mitschnitt(Basis):
         self.assertGreater(len(zeilen), 1)
         self.assertTrue(zeilen[1].startswith("2"))      # ISO-Datum
 
+    def test_eine_wackelnde_messreihe_sagt_es_selbst(self):
+        """A calibration run on a worn port should say so rather than hand
+        over a median of noise."""
+        self.battery(status="Charging", ampere=1.2, volt=4.3)
+
+        echte_battery = self.battery
+        zaehler = {"n": 0}
+
+        def wechselnd(*a, **kw):
+            zaehler["n"] += 1
+            echte_battery(status="Charging" if zaehler["n"] % 2 else
+                          "Discharging", ampere=1.2, volt=4.3)
+
+        # Der Zustand wechselt zwischen den Messungen.
+        import threading
+        stop = threading.Event()
+
+        def ruettler():
+            while not stop.is_set():
+                wechselnd()
+                stop.wait(0.02)
+
+        t = threading.Thread(target=ruettler)
+        t.start()
+        try:
+            _rc, aus, _ = self.run_cmd("watch", "0.4", "--interval", "0.05")
+        finally:
+            stop.set()
+            t.join()
+        self.assertIn("direction changed", aus)
+        self.assertIn("not a baseline", aus)
+
     def test_unlesbarer_akku_erzeugt_keine_zeilen(self):
         rc, aus, _ = self.run_cmd("watch", "0.1", "--interval", "0.05")
         self.assertEqual(rc, 0)
@@ -1082,6 +1114,43 @@ class DerLauf(Basis):
         self.assertFalse(self.d.tick(now=1000))
         self.assertEqual(self.d.showing, (None, None))
         self.assertEqual(b.Setting().get(), "base")
+
+    def test_eine_wackelnde_richtung_faerbt_die_huelle_nicht(self):
+        """A worn USB port flips between charging and discharging every few
+        minutes. Following that would restyle every GTK3 app about once a
+        minute for something the cable is doing."""
+        self.d.cfg["discharging"] = True
+        self.battery(status="Charging", ampere=1.2, volt=4.3, percent=80)
+        self.d.tick(now=1000)
+        self.assertEqual(self.d.showing[0], "amber")
+        # Stecker wackelt: noch im selben Fenster, andere Richtung.
+        # 1050, nicht 1100: nach einer vollen Fensterlaenge waere die alte
+        # Messung heraus und die Richtung waere wieder eindeutig - der Test
+        # wuerde dann das Gegenteil pruefen.
+        self.battery(status="Discharging", ampere=1.6, volt=3.9, percent=80)
+        self.assertTrue(self.d.tick(now=1050))
+        self.assertIsNone(self.d.showing[0])
+
+    def test_und_faerbt_wieder_wenn_sie_sich_beruhigt_hat(self):
+        self.d.cfg["discharging"] = True
+        self.battery(status="Charging", ampere=1.2, volt=4.3, percent=80)
+        self.d.tick(now=1000)
+        self.battery(status="Discharging", ampere=1.6, volt=3.9, percent=80)
+        self.d.tick(now=1050)
+        self.assertIsNone(self.d.showing[0])
+        # Ein ganzes Fenster lang nur noch die eine Richtung
+        self.d.tick(now=1050 + b.DEFAULTS["window_s"] + 1)
+        self.assertEqual(self.d.showing[0], "red")
+
+    def test_der_ladestand_wackelt_nicht_mit(self):
+        """The level is the same number whichever way the current is
+        flowing, so it keeps its colour while the direction is unsettled."""
+        self.d.icon = "battery-level-10-charging-symbolic"   # zwei Pfade
+        self.battery(status="Charging", ampere=1.2, volt=4.3, percent=9)
+        self.d.tick(now=1000)
+        self.battery(status="Discharging", ampere=1.2, volt=3.9, percent=9)
+        self.d.tick(now=1050)
+        self.assertEqual(self.d.showing[1], "red")
 
     def test_setzen_kann_scheitern(self):
         class Stur(b.Setting):

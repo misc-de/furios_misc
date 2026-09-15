@@ -21,6 +21,11 @@ Die Farbe der Huelle im Akkubetrieb ist ausgeschaltet, bis man sie
 einschaltet; die Fuellung faerbt sich immer, weil ein fast leerer Akku das
 sagen soll, ob er nun laedt, entlaedt oder voll ist.
 
+Eine wackelnde Verbindung — defekte Buchse, mueder Stecker — laesst das
+Telefon zwischen Laden und Entladen springen. Der Huelle folgt das **nicht**:
+sie bleibt farblos, solange sich die Messungen einer Minute nicht ueber die
+Richtung einig sind. Sonst waere die Farbe eine Anzeige des Kabels.
+
 **Zwei Einschraenkungen, die vom Symbol kommen, nicht von uns** (Details in
 FINDINGS.md): Adwaitas Entlade-Symbole bestehen aus EINEM Pfad — dort gibt
 es keine zwei Haelften, und die dringlichere der beiden Farben bekommt das
@@ -164,5 +169,5 @@ tests/run-tests.sh      # ohne Display, ohne Akku, ohne root - NIE mit sudo
 tests/coverage.sh
 ```
 
-123 Tests, 89,1 % der Zeilen. Was fehlt, ist die D-Bus-Verdrahtung des Daemons
+127 Tests, 89,3 % der Zeilen. Was fehlt, ist die D-Bus-Verdrahtung des Daemons
 — die wird am Geraet belegt, nicht simuliert (FINDINGS.md).

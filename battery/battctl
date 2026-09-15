@@ -886,6 +886,14 @@ class Daemon:
         now = time.time() if now is None else now
         if mess is None or not mess["moving"]:
             return None
+        # A direction that keeps changing is not a direction. With a worn
+        # USB port the phone flips between charging and discharging every
+        # few minutes (measured on 15.9.2026: nine times in 26 minutes),
+        # and following that would restyle every GTK3 app about once a
+        # minute for something the cable is doing, not the battery. So the
+        # shell says nothing until a whole window agrees.
+        if len({c for (_, _, c) in self.samples}) > 1:
+            return None
         gleich = [w for (_, w, c) in self.samples if c == mess["charging"]]
         mitte = median(gleich) if gleich else mess["watt"]
         glatt = dict(mess)
@@ -1071,6 +1079,10 @@ def cmd_daemon(_argv):
     return 0
 
 
+def now_iso():
+    return time.strftime("%Y-%m-%dT%H:%M:%S")
+
+
 def quantil(werte, anteil):
     if not werte:
         return None
@@ -1114,25 +1126,40 @@ def cmd_watch(argv):
         aus.write(kopf + "\n")
 
     proben = {"Charging": [], "Discharging": []}
+    richtungen = []
     ende = time.time() + sekunden
     try:
         while time.time() < ende:
             mess = read_battery()
             if mess and mess["plausible"]:
                 zeile = "%s,%s,%.3f,%s,%s" % (
-                    time.strftime("%Y-%m-%dT%H:%M:%S"), mess["status"],
+                    now_iso(), mess["status"],
                     mess["watt"], _read("capacity") or "?", _screen_on())
                 print(zeile, flush=True)
                 if aus:
                     aus.write(zeile + "\n")
                     aus.flush()
                 proben.setdefault(mess["status"], []).append(mess["watt"])
+                richtungen.append((now_iso(), mess["status"]))
             time.sleep(abstand)
     except KeyboardInterrupt:
         print()
     finally:
         if aus:
             aus.close()
+
+    # How often the direction changed during the run. A worn USB port
+    # turns the charging half of a measurement into noise, and a calibration
+    # run should say so rather than hand over a median of it.
+    wechsel = 0
+    vorher = None
+    for zeitpunkt, zustand in richtungen:
+        if vorher is not None and zustand != vorher:
+            wechsel += 1
+        vorher = zustand
+    if wechsel:
+        print("\ndirection changed %d times during the run - a charging "
+              "figure from this is not a baseline" % wechsel)
 
     for zustand in ("Discharging", "Charging"):
         werte = proben.get(zustand) or []

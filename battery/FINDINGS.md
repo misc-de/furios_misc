@@ -16,11 +16,26 @@ Produkt = Leistung **in den Akku**. Am 15.9.2026 um 14:19 waren das
 0,23–0,46 A, also **1,0–1,9 W**, und `time_to_full_now` sprang von 49 auf
 200 Minuten.
 
-Der Einbruch ist **nicht erklaert**. Nicht thermisch: Akku 36,6 °C und
-fallend, `sw_jeita` = 0, keine Thermalzone ueber 45 °C. Ladestand 76 %, fuer
-die CV-Phase zu frueh. Bleiben Netzteil, Kabel oder eine stille
-Neuverhandlung. Wer die Schwellen ernst nimmt, sollte deshalb erst eine ganze
-Ladung mitschneiden, bevor er 7 W fuer „schnell" haelt.
+Der Einbruch ist **erklaert, und zwar ausserhalb der Software**: die
+USB-Buchse dieses Geraets ist defekt, die Verbindung wackelt (Auskunft des
+Nutzers, 15.9.). Ausgeschlossen war vorher schon alles Thermische (Akku
+36,6 °C und fallend, `sw_jeita` = 0, keine Thermalzone ueber 45 °C) und die
+CV-Phase (Ladestand 76 %, dafuer zu frueh).
+
+Messbar ist das an der **Richtung**: in 26 Minuten wechselte der Zustand
+neunmal zwischen `Charging` und `Discharging`. Zwei Folgen:
+
+- Eine Kalibrierung der LADE-Schwellen ist an diesem Geraet vorerst
+  sinnlos. `battctl watch` zaehlt die Richtungswechsel und sagt es am Ende
+  von selbst („direction changed N times ... not a baseline"). Die
+  Entlade-Seite bleibt brauchbar.
+- Der Dienst darf einer wackelnden Richtung nicht folgen. Jeder Farbwechsel
+  restyled alle GTK-3-Anwendungen, und gemessen waere das etwa einmal pro
+  Minute gewesen — fuer etwas, das das Kabel tut und nicht der Akku. Die
+  Huelle bleibt deshalb farblos, solange die Messungen eines ganzen
+  Fensters sich nicht ueber die Richtung einig sind. Der Ladestand faerbt
+  weiter: die Prozentzahl ist dieselbe, in welche Richtung der Strom auch
+  fliesst.
 
 Die Momentanwerte schwanken um **±0,3 A** von Sekunde zu Sekunde. `current_avg`
 des Treibers glaettet, haengt aber lange nach (0,84 → 0,45 A in einer Minute).
