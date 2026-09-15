@@ -127,6 +127,50 @@ SHA-1 der Regel (`adw-gtk3-batt5ae1-green`). Aeltere Generationen werden beim
 Schreiben mit entfernt, damit sich nicht pro Aktualisierung ein Verzeichnis
 ansammelt.
 
+## 5c · Die Akkusymbole sind DREI Familien, verschieden gebaut
+
+Aufgefallen, weil das Symbol ploetzlich komplett rot war. Adwaita zeichnet
+nicht ein Symbol mit Varianten, sondern drei verschiedene Sorten:
+
+| Datei | Pfade | `color` faerbt | Palette faerbt |
+|---|---|---|---|
+| `battery-level-NN-charging-symbolic` | 2 | Huelle + Blitz | die Fuellung |
+| `battery-level-NN-plugged-in-symbolic` | 2 | die Huelle | die Fuellung |
+| `battery-level-NN-symbolic` | **1** | **alles** | **nichts** |
+
+Von den zwoelf Entlade-Symbolen haben nur drei (0, 10, 20 %) einen zweiten
+Pfad — dort faerbt Adwaita den Rest selbst warnend ein. Bei den anderen neun
+gibt es schlicht keine zwei Haelften, und `color` malt das ganze Symbol.
+
+Konsequenz: die Trennung „Huelle = Leistung, Fuellung = Ladestand" gilt nur,
+wo das Symbol sie hergibt. Auf einem Symbol aus einem Stueck bekommt die
+**dringlichere** der beiden Farben das ganze Symbol (rot > orange > gruen >
+gar nichts) — keine der beiden Aussagen verschwindet still, uebrig bleibt
+„hier ist etwas beachtenswert", und mehr kann eine einzige Form nicht sagen.
+
+Welche Familie auf dem Schirm ist, wird nicht geraten: `battctl` fragt
+UPower nach `icon-name` (dieselbe Quelle, der phosh folgt), sucht die Datei
+im Symbolthema und liest nach, ob sie ueberhaupt ein `class=` enthaelt. Erst
+wenn es die Datei nicht gibt, entscheidet der Name.
+
+## 5d · Kernel und UPower widersprechen sich
+
+Am 15.9. gemessen, waehrend das Ladegeraet spinnte:
+
+```
+/sys/.../status   Charging      current_now x voltage_now = 1,8 W
+upower            discharging   energy-rate 0 W   icon battery-full-symbolic
+```
+
+phosh folgt UPower, zeichnete also das Symbol OHNE Blitz — und wir malten
+eine Ladeleistungsfarbe darauf. Aus Sicht des Nutzers: ein komplett rotes
+Akkusymbol bei 86 % ohne erkennbaren Grund.
+
+Regel daraus: **widersprechen sich die beiden, bekommt die Huelle gar keine
+Farbe.** Eine Farbe, die eine Frage beantwortet, die das Bild nicht stellt,
+ist schlechter als keine. Der Ladestand faerbt weiter — darueber sind sich
+beide Quellen einig.
+
 ## 6 · Die Falle, die das ganze Telefon umgefaerbt haette
 
 GTK3 nimmt `gtk-dark.css`, wenn es die Datei gibt und die Sitzung dunkel

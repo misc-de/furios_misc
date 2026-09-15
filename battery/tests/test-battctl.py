@@ -57,11 +57,15 @@ class Basis(unittest.TestCase):
         b.THEME_DIRS[:] = [self.themes]
         self.set_theme("base")
         os.environ["FURIOS_BATTERY_SETTING_FILE"] = self.setting
+        # No icon name unless a test says one: otherwise every run would
+        # depend on what this phone's UPower is saying at the time.
+        os.environ["FURIOS_BATTERY_ICON"] = ""
 
     def tearDown(self):
         b.SYSFS, b.CONFIG, b.THEMES = self.alt[:3]
         b.THEME_DIRS[:] = self.alt[3]
         os.environ.pop("FURIOS_BATTERY_SETTING_FILE", None)
+        os.environ.pop("FURIOS_BATTERY_ICON", None)
         os.environ["PATH"] = self.alter_pfad
         for ordner, _, dateien in os.walk(self.tmp, topdown=False):
             for datei in dateien:
@@ -294,6 +298,110 @@ class Fuellstand(Basis):
             self.battery(status=zustand, percent=9)
             self.assertEqual(b.wanted_level(b.read_battery(), self.cfg), "red",
                              zustand)
+
+
+class Symbolfamilien(Basis):
+    """Welches Symbol auf dem Schirm ist, entscheidet, ob es zwei Haelften
+    zu faerben gibt."""
+
+    def setUp(self):
+        super().setUp()
+        self.icons = os.path.join(self.tmp, "icons", "Adwaita",
+                                  "symbolic", "status")
+        os.makedirs(self.icons)
+        self.alte_dirs = list(b.ICON_DIRS)
+        b.ICON_DIRS[:] = [os.path.join(self.tmp, "icons")]
+
+    def tearDown(self):
+        b.ICON_DIRS[:] = self.alte_dirs
+        super().tearDown()
+
+    def icon(self, name, mit_klasse):
+        pfad = os.path.join(self.icons, name + ".svg")
+        with open(pfad, "w") as fh:
+            fh.write('<svg>%s<path d="m 0 0"/></svg>'
+                     % ('<path class="success" d="m 5 7"/>' if mit_klasse else ""))
+        return pfad
+
+    def test_zwei_pfade_lassen_sich_getrennt_faerben(self):
+        self.icon("battery-level-90-charging-symbolic", True)
+        self.assertTrue(b.icon_is_split("battery-level-90-charging-symbolic"))
+
+    def test_ein_pfad_nicht(self):
+        """Adwaitas zwoelf Entlade-Symbole sind EIN Pfad: `color` faerbt das
+        ganze Symbol, die Palette nichts."""
+        self.icon("battery-level-90-symbolic", False)
+        self.assertFalse(b.icon_is_split("battery-level-90-symbolic"))
+
+    def test_die_datei_entscheidet_nicht_der_name(self):
+        """Ein Symbolthema kann alles anders bauen - gelesen wird die
+        Datei, geraten nur, wenn es keine gibt."""
+        self.icon("battery-full-charging-symbolic", False)
+        self.assertFalse(b.icon_is_split("battery-full-charging-symbolic"))
+
+    def test_ohne_datei_entscheidet_der_name(self):
+        self.assertTrue(b.icon_is_split("battery-level-40-charging-symbolic"))
+        self.assertTrue(b.icon_is_split("battery-level-40-plugged-in-symbolic"))
+        self.assertFalse(b.icon_is_split("battery-level-40-symbolic"))
+
+    def test_ohne_namen_entscheidet_der_ladezustand(self):
+        self.assertTrue(b.icon_is_split(None, charging=True))
+        self.assertFalse(b.icon_is_split(None, charging=False))
+        self.assertIsNone(b.find_icon(None))
+
+    def test_widersprechende_quellen_faerben_die_huelle_nicht(self):
+        """Seen on the phone: sysfs "Charging" at 1.8 W, UPower
+        "discharging" at 0 W, and phosh drawing the icon without a bolt. A
+        charging colour on that icon answers a question the picture does
+        not ask."""
+        self.battery(status="Charging", ampere=0.2, volt=4.3)
+        mess = b.read_battery()
+        cfg = dict(b.DEFAULTS)
+        self.assertEqual(b.wanted_bucket(mess, cfg), "red")
+        self.assertEqual(
+            b.wanted_bucket(mess, cfg, icon="battery-level-90-charging-symbolic"),
+            "red")
+        self.assertIsNone(
+            b.wanted_bucket(mess, cfg, icon="battery-full-symbolic"))
+
+    def test_einig_ohne_symbol_und_ohne_messung(self):
+        self.battery()
+        self.assertTrue(b.sources_agree(b.read_battery(), None))
+        self.assertTrue(b.sources_agree(None, "battery-full-symbolic"))
+
+    def test_der_ladestand_bleibt_davon_unberuehrt(self):
+        """How full it is, both sources agree on."""
+        self.battery(status="Charging", ampere=0.2, volt=4.3, percent=9)
+        self.assertEqual(b.wanted_level(b.read_battery(), dict(b.DEFAULTS)),
+                         "red")
+
+    def test_eine_haelfte_bekommt_die_dringlichere_farbe(self):
+        self.assertEqual(b.merge_colours("green", "red"), "red")
+        self.assertEqual(b.merge_colours("red", "amber"), "red")
+        self.assertEqual(b.merge_colours(None, "amber"), "amber")
+        self.assertEqual(b.merge_colours("green", None), "green")
+        self.assertIsNone(b.merge_colours(None, None))
+
+    def test_der_umweg_fuer_die_tests_ist_genau_einer(self):
+        os.environ["FURIOS_BATTERY_ICON"] = "battery-full-symbolic"
+        self.assertEqual(b.upower_icon(), "battery-full-symbolic")
+        os.environ["FURIOS_BATTERY_ICON"] = ""
+        self.assertIsNone(b.upower_icon())
+
+    def test_upower_wird_gefragt_weil_phosh_es_auch_tut(self):
+        os.environ.pop("FURIOS_BATTERY_ICON", None)
+        bin_dir = os.path.join(self.tmp, "bin")
+        os.makedirs(bin_dir, exist_ok=True)
+        with open(os.path.join(bin_dir, "upower"), "w") as fh:
+            fh.write("#!/bin/sh\necho \"  icon-name: 'battery-full-symbolic'\"\n")
+        os.chmod(os.path.join(bin_dir, "upower"), 0o755)
+        os.environ["PATH"] = bin_dir + ":" + os.environ["PATH"]
+        self.assertEqual(b.upower_icon(), "battery-full-symbolic")
+
+    def test_ohne_upower_ist_es_kein_absturz(self):
+        os.environ.pop("FURIOS_BATTERY_ICON", None)
+        os.environ["PATH"] = os.path.join(self.tmp, "leer")
+        self.assertIsNone(b.upower_icon())
 
 
 class Namen(Basis):
@@ -927,11 +1035,53 @@ class DerLauf(Basis):
 
     def test_die_fuellung_faerbt_auch_ohne_huelle(self):
         """On battery with an ordinary drain the shell says nothing - the
-        filling still says the battery is nearly empty."""
+        filling still says the battery is nearly empty.
+
+        With the real battery-level-10-symbolic, which is one of the three
+        discharge icons Adwaita DOES draw in two paths (it colours the
+        remainder itself at that level). The other nine are a single shape;
+        that case is the test below.
+        """
+        self.d.icon = "battery-level-10-symbolic"
         self.battery(status="Discharging", ampere=0.2, volt=3.9, percent=8)
         self.assertTrue(self.d.tick(now=1000))
         self.assertEqual(self.d.showing, (None, "red"))
         self.assertEqual(b.Setting().get(), b.theme_name("base", None, "red"))
+
+    def test_ein_symbol_aus_einem_stueck_bekommt_eine_farbe(self):
+        """The plain discharge icon is a single path, so colouring shell and
+        filling differently would mean one of them silently overwriting the
+        other. The more urgent one speaks for the whole icon."""
+        self.d.icon = "battery-level-90-symbolic"
+        self.d.cfg["discharging"] = True
+        self.battery(status="Discharging", ampere=1.6, volt=3.9, percent=90)
+        self.d.tick(now=1000)              # 6.24 W: Huelle rot, Stand egal
+        self.assertEqual(self.d.showing, ("red", "red"))
+
+    def test_und_die_dringlichere_gewinnt(self):
+        """Half full and drawing hard: the level would say amber, the drain
+        says red, and one shape can only say one of them."""
+        self.d.icon = "battery-level-50-symbolic"
+        self.d.cfg["discharging"] = True
+        self.battery(status="Discharging", ampere=1.6, volt=3.9, percent=50)
+        self.d.tick(now=1000)              # 6.24 W
+        self.assertEqual(self.d.showing, ("red", "red"))
+
+    def test_beim_laden_bleiben_es_zwei(self):
+        self.d.icon = "battery-level-50-charging-symbolic"
+        self.battery(ampere=1.2, volt=4.3, percent=50)   # 5.16 W: amber
+        self.d.tick(now=1000)
+        self.assertEqual(self.d.showing, ("amber", "amber"))
+        self.battery(ampere=2.5, volt=4.3, percent=50)   # 10.75 W: green
+        self.d.tick(now=1100)
+        self.assertEqual(self.d.showing, ("green", "amber"))
+
+    def test_der_lauf_faerbt_bei_widerspruch_nur_den_stand(self):
+        self.d.icon = "battery-full-symbolic"      # kein Blitz
+        self.battery(status="Charging", ampere=0.2, volt=4.3, percent=85)
+        self.assertFalse(self.d.tick(now=1000))
+        self.assertEqual(self.d.showing, (None, None))
+        self.assertEqual(b.Setting().get(), "base")
 
     def test_setzen_kann_scheitern(self):
         class Stur(b.Setting):

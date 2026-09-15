@@ -161,6 +161,105 @@ DEFAULTS = {
     "window_s": 60,
 }
 
+# Where the icons live, and the device UPower publishes them for.
+ICON_DIRS = ["/usr/share/icons", "/usr/local/share/icons",
+             os.path.expanduser("~/.local/share/icons"),
+             os.path.expanduser("~/.icons")]
+UPOWER_DEV = "/org/freedesktop/UPower/devices/battery_battery"
+
+# How urgent a colour is, for the case where only one of them fits.
+RANK = {None: 0, "green": 1, "amber": 2, "red": 3}
+
+
+def find_icon(name):
+    """The file behind an icon name, or None."""
+    if not name:
+        return None
+    for wurzel in ICON_DIRS:
+        for teil in ("symbolic/status", "scalable/status", "symbolic/legacy",
+                     "scalable/legacy"):
+            for theme in ("Adwaita", "hicolor", ""):
+                pfad = os.path.join(wurzel, theme, teil, name + ".svg")
+                if os.path.isfile(pfad):
+                    return pfad
+    return None
+
+
+def icon_is_split(name, charging=False):
+    """Can this icon's filling be coloured apart from its shell?
+
+    Only where the SVG draws it as its own path. In Adwaita that is true of
+    the charging and plugged-in icons and NOT of the twelve plain ones an
+    ordinary discharge uses: those are a single path, so `color` paints the
+    whole battery and the palette paints nothing. Measured, not assumed -
+    the file is read and asked whether it has a class at all.
+    """
+    pfad = find_icon(name)
+    if pfad:
+        try:
+            with open(pfad) as fh:
+                return "class=" in fh.read()
+        except OSError:
+            pass
+    if name:
+        return "-charging" in name or "-plugged-in" in name
+    return bool(charging)
+
+
+def upower_icon():
+    """The icon name UPower publishes.
+
+    Asked because it is what phosh actually shows, and because the two
+    sources disagree: seen on 15.9.2026 with sysfs saying "Charging" at
+    0.6 W while UPower said "discharging" at 0 W and the shell drew the
+    plain icon. Which icon is on screen decides whether there are two
+    halves to colour, so it has to come from the same place as the icon.
+    """
+    # One test seam, like the settings file: the tests must not depend on
+    # what this phone's UPower happens to say while they run.
+    erzwungen = os.environ.get("FURIOS_BATTERY_ICON")
+    if erzwungen is not None:
+        return erzwungen or None
+    try:
+        aus = subprocess.run(["upower", "-i", UPOWER_DEV],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for zeile in aus.stdout.splitlines():
+        if "icon-name" in zeile:
+            return zeile.split(":", 1)[1].strip().strip("'")
+    return None
+
+
+def icon_says_charging(name):
+    """Does the icon on screen carry the bolt?"""
+    return "-charging" in (name or "")
+
+
+def sources_agree(mess, icon=None):
+    """Do the kernel and UPower tell the same story?
+
+    They do not always. On 15.9.2026 sysfs said "Charging" at 1.8 W while
+    UPower said "discharging" at 0 W, and phosh - which follows UPower -
+    drew the icon without a bolt. Painting a charging colour onto an icon
+    that says the phone is on battery is worse than painting nothing: the
+    colour would be answering a question the picture does not ask.
+
+    So when they disagree, the shell gets no colour at all. The filling
+    still does - how full the battery is, both sources agree on.
+    """
+    if mess is None or icon is None:
+        return True
+    return icon_says_charging(icon) == bool(mess["charging"])
+
+
+def merge_colours(power, level):
+    """One colour for an icon that has only one shape: the more urgent of
+    the two. Neither statement is dropped silently - what is left is "there
+    is something worth noticing", which is what a single shape can say."""
+    return power if RANK[power] >= RANK[level] else level
+
+
 # A plausibility ceiling, not a limit. current_now × voltage_now is the whole
 # measurement, and a driver that reports milliamps where the class says
 # microamps would produce a thousandfold number and a permanently green icon.
@@ -328,9 +427,11 @@ def wanted_level(mess, cfg, current=None):
     return level_for(mess.get("percent"), cfg, current)
 
 
-def wanted_bucket(mess, cfg, current=None):
-    """The colour the icon should have, or None for "leave it alone"."""
+def wanted_bucket(mess, cfg, current=None, icon=None):
+    """The colour of the shell, or None for "leave it alone"."""
     if mess is None or not mess["plausible"] or not mess["moving"]:
+        return None
+    if not sources_agree(mess, icon):
         return None
     if mess["charging"] and not cfg["charging"]:
         return None
@@ -550,8 +651,13 @@ def describe(cfg=None, setting=None, base=None):
     jetzt = setting.get()
     basis = base or base_name(jetzt)
     zeigt, zeigt_stand = colours_of(jetzt)
-    bucket = wanted_bucket(mess, cfg, zeigt)
     stand = wanted_level(mess, cfg, zeigt_stand)
+    symbol = upower_icon()
+    einig = sources_agree(mess, symbol)
+    bucket = wanted_bucket(mess, cfg, zeigt, symbol)
+    geteilt = icon_is_split(symbol, (mess or {}).get("charging"))
+    if not geteilt:
+        bucket = stand = merge_colours(bucket, stand)
     hell, _ = base_css(basis)
     return {
         "state": (mess or {}).get("status", "unknown"),
@@ -566,6 +672,11 @@ def describe(cfg=None, setting=None, base=None):
         # The filling, which says something else: how full, not how fast.
         "level_bucket": stand or "none",
         "level_showing": zeigt_stand or "none",
+        # Whether this icon has two halves to colour at all.
+        "icon": symbol or "?",
+        "split_icon": geteilt,
+        # False while the kernel and UPower disagree about the direction.
+        "sources_agree": einig,
         "theme": jetzt,
         "base_theme": basis,
         # A theme we cannot build on is the one failure that leaves everything
@@ -592,6 +703,13 @@ def cmd_status(argv):
     print("filling:      %s (would be %s) at %s %%"
           % (zustand["level_showing"], zustand["level_bucket"],
              "?" if zustand["percent"] is None else int(zustand["percent"])))
+    print("icon:         %s%s" % (zustand["icon"],
+          "" if zustand["split_icon"]
+          else " - one shape, so both halves take the same colour"))
+    if not zustand["sources_agree"]:
+        print("             ! the kernel says %s and UPower draws the other "
+              "one - no colour for the shell until they agree"
+              % zustand["state"].lower())
     print("base theme:   %s" % zustand["base_theme"])
     print("theme now:    %s" % zustand["theme"])
     if not zustand["can_theme"]:
@@ -705,6 +823,10 @@ class Daemon:
         self.last_change = 0.0
         self.last_good = 0.0              # wann zuletzt etwas Brauchbares kam
         self.cfg_stamp = self._stamp()
+        # The icon name UPower publishes, kept up to date by whoever drives
+        # the loop. It decides whether there are two halves to colour: the
+        # plain discharge icons are a single path.
+        self.icon = None
         self.base = base_name(jetzt if jetzt is not None else self.setting.get())
 
     @staticmethod
@@ -768,7 +890,7 @@ class Daemon:
         mitte = median(gleich) if gleich else mess["watt"]
         glatt = dict(mess)
         glatt["watt"] = mitte
-        return wanted_bucket(glatt, self.cfg, self.showing[0])
+        return wanted_bucket(glatt, self.cfg, self.showing[0], self.icon)
 
     def apply(self, paar, now=None):
         """Set the theme for (shell colour, filling colour).
@@ -821,9 +943,14 @@ class Daemon:
                 return self.apply((None, None), now)
             return False
         self.last_good = now
-        return self.apply((self.decide(gemessen, now),
-                           wanted_level(gemessen, self.cfg, self.showing[1])),
-                          now)
+        huelle = self.decide(gemessen, now)
+        fuellung = wanted_level(gemessen, self.cfg, self.showing[1])
+        if not icon_is_split(self.icon, gemessen["charging"]):
+            # One shape, one colour. Saying both would mean the filling
+            # silently overwriting the shell, or the other way round -
+            # instead the more urgent of the two speaks for the whole icon.
+            huelle = fuellung = merge_colours(huelle, fuellung)
+        return self.apply((huelle, fuellung), now)
 
 
 def cmd_daemon(_argv):
@@ -871,9 +998,15 @@ def cmd_daemon(_argv):
     print("colouring the battery icon on top of %s" % daemon.base, flush=True)
 
     schleife = GLib.MainLoop()
+    proxy = None
 
     def aufwachen(*_):
         try:
+            if proxy is not None:
+                # Cached, so this costs nothing: the property arrives with
+                # the signal that woke us.
+                name = proxy.get_cached_property("IconName")
+                daemon.icon = name.get_string() if name else None
             if daemon.tick():
                 print("shell %s, filling %s -> %s"
                       % (daemon.showing[0] or "plain",
@@ -901,7 +1034,6 @@ def cmd_daemon(_argv):
     # whose connection is dropped expires silently - no error, no log line, a
     # healthy-looking service that never measures anything. That has happened
     # here before.
-    proxy = None
     try:
         bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
         proxy = Gio.DBusProxy.new_sync(

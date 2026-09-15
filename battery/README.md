@@ -21,6 +21,13 @@ Die Farbe der Huelle im Akkubetrieb ist ausgeschaltet, bis man sie
 einschaltet; die Fuellung faerbt sich immer, weil ein fast leerer Akku das
 sagen soll, ob er nun laedt, entlaedt oder voll ist.
 
+**Zwei Einschraenkungen, die vom Symbol kommen, nicht von uns** (Details in
+FINDINGS.md): Adwaitas Entlade-Symbole bestehen aus EINEM Pfad — dort gibt
+es keine zwei Haelften, und die dringlichere der beiden Farben bekommt das
+ganze Symbol. Und wenn Kernel und UPower sich ueber die Richtung
+widersprechen, bleibt die Huelle farblos, weil phosh dann ein Symbol
+zeichnet, zu dem die Farbe nicht passt.
+
 ```
 git clone https://github.com/misc-de/furios_misc
 cd furios_misc/battery
@@ -157,5 +164,5 @@ tests/run-tests.sh      # ohne Display, ohne Akku, ohne root - NIE mit sudo
 tests/coverage.sh
 ```
 
-107 Tests, 89,2 % der Zeilen. Was fehlt, ist die D-Bus-Verdrahtung des Daemons
+123 Tests, 89,1 % der Zeilen. Was fehlt, ist die D-Bus-Verdrahtung des Daemons
 — die wird am Geraet belegt, nicht simuliert (FINDINGS.md).
