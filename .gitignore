@@ -1,0 +1,3 @@
+# Byte-Code der Testlaeufe
+__pycache__/
+*.pyc

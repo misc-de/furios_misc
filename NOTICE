@@ -1,0 +1,19 @@
+Dieses Projekt enthaelt ausschliesslich eigenen Code (MIT, siehe LICENSE).
+
+Es verwendet zur Laufzeit:
+  - GLib und Gio (LGPL-2.1+), ueber GObject-Introspection - fuer die
+    Hauptschleife und das Abo bei UPower
+  - gsettings aus glib2.0-bin (LGPL-2.1+), zum Lesen und Setzen von
+    org.gnome.desktop.interface gtk-theme
+  - UPower (GPL-2.0+), nur als Taktgeber: es wird ein Signal abonniert,
+    nichts aufgerufen und nichts veraendert
+
+Es liest, ohne sie zu veraendern:
+  - /sys/class/power_supply/battery/{status,current_now,voltage_now}
+
+Es erzeugt drei GTK-3-Themes unter ~/.themes, die aus einer @import-Zeile auf
+das Theme des Nutzers und einer Farbregel bestehen. Das Theme des Nutzers -
+auf diesem Telefon adw-gtk3 (MIT) - wird dabei nicht kopiert, nicht veraendert
+und nicht neu lizenziert.
+
+Kein Bestandteil von FuriOS wird gepatcht oder ersetzt.

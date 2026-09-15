@@ -1,0 +1,800 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) 2026 misc-de
+# SPDX-License-Identifier: MIT
+"""Colour phosh's battery icon by how fast the battery is actually moving.
+
+The phone shows a percentage and a lightning bolt, and both look the same
+whether 1 watt or 6 are going in. That is the one number worth seeing at a
+glance - a bad cable, a laptop port or a charger that has quietly renegotiated
+all look like "charging" and cost hours.
+
+So: green while it is going in fast, amber in the middle, red when it is
+barely moving. Optionally the same on battery, where the meaning is reversed -
+green is a phone that is drawing little.
+
+How the colour gets there, because the obvious way does not work:
+
+  phosh is GTK3 and its battery icon is the CSS node `phosh-battery-info`, so
+  one line of CSS colours it. But GTK3 reads ~/.config/gtk-3.0/gtk.css exactly
+  once, at program start, and never looks at it again - a colour that changes
+  would need the shell restarted every time, which on this phone is the one
+  thing not to do.
+
+  What GTK3 does re-read at runtime is the THEME. Changing
+  org.gnome.desktop.interface gtk-theme restyles every running GTK3 app,
+  phosh included, within a second. So this writes three themes that are the
+  user's own theme plus one line - `phosh-battery-info image { color: … }` -
+  and switches between them by name.
+
+That is also the cost, and it is worth knowing before turning this on: every
+change restyles all GTK3 apps for a moment, and the theme setting shows one of
+our names while it is active. It happens when the colour changes, not
+continuously - a handful of times per charge.
+
+Nothing here needs root. It reads two files in /sys, writes ~/.themes, and
+sets one gsettings key.
+"""
+
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+
+SYSFS = os.environ.get("FURIOS_BATTERY_SYSFS", "/sys/class/power_supply/battery")
+CONFIG = os.environ.get(
+    "FURIOS_BATTERY_CONFIG",
+    os.path.join(os.environ.get("XDG_CONFIG_HOME",
+                                os.path.expanduser("~/.config")),
+                 "furios-battery", "config.json"))
+THEMES = os.environ.get("FURIOS_BATTERY_THEMES",
+                        os.path.expanduser("~/.themes"))
+# Where a theme we did not write may live. Ours always go to THEMES.
+THEME_DIRS = [
+    THEMES,
+    os.path.join(os.environ.get("XDG_DATA_HOME",
+                                os.path.expanduser("~/.local/share")), "themes"),
+    "/usr/local/share/themes",
+    "/usr/share/themes",
+]
+
+SETTING = "org.gnome.desktop.interface gtk-theme"
+# The marker that makes one of our themes recognisable as ours. It has to
+# survive a crash: the daemon may be killed with a colour theme active, and
+# the next start has to be able to tell "adw-gtk3-batt-green" from a theme
+# somebody actually chose.
+MARK = "-batt-"
+
+COLORS = {"green": "#2ec27e", "amber": "#ff7800", "red": "#e01b24"}
+BUCKETS = ("green", "amber", "red")
+
+DEFAULTS = {
+    # Colour while charging. On by default - it is what this is for.
+    "charging": True,
+    # Colour on battery too, with the meaning reversed: green is a phone that
+    # is drawing little. Off by default, because a colour that is on all day
+    # stops being a signal.
+    "discharging": False,
+    # Charging: watts into the battery. Defaults are deliberately provisional
+    # and meant to be corrected once a full charge has been watched - see
+    # FINDINGS.md. This phone negotiates 12.7 W over USB-PD but was seen
+    # taking 5.9 W at its best.
+    "charge_green_w": 7.0,
+    "charge_amber_w": 3.0,
+    # On battery: watts out. Under drain_green_w is green, over drain_amber_w
+    # is red.
+    "drain_green_w": 1.0,
+    "drain_amber_w": 3.0,
+    # How far past a threshold the power has to go before the colour follows.
+    # A tenth: the instantaneous current swings by a quarter of an amp from
+    # one reading to the next, and without this the icon would flicker
+    # between two colours on the noise alone.
+    "hysteresis": 0.1,
+    # And how long a colour stays put at the very least. Each change restyles
+    # every GTK3 app, so this is the one number that decides what this costs
+    # the rest of the phone.
+    "dwell_s": 45,
+    # How long a reading counts towards the median.
+    "window_s": 60,
+}
+
+# A plausibility ceiling, not a limit. current_now × voltage_now is the whole
+# measurement, and a driver that reports milliamps where the class says
+# microamps would produce a thousandfold number and a permanently green icon.
+# Better to say nothing than to say something wrong.
+MAX_PLAUSIBLE_W = 60.0
+
+
+# --------------------------------------------------------------- Konfiguration
+
+def load_config(path=None):
+    """Defaults, overlaid with whatever is on disk.
+
+    A broken or half-written file is not an error worth stopping for: the
+    colour is cosmetic, the defaults are sane, and a daemon that refuses to
+    start because a json file has a stray comma would be the bigger fault.
+    """
+    cfg = dict(DEFAULTS)
+    try:
+        with open(path or CONFIG) as fh:
+            gelesen = json.load(fh)
+        if isinstance(gelesen, dict):
+            for key, val in gelesen.items():
+                if key in DEFAULTS and isinstance(val, type(DEFAULTS[key])):
+                    cfg[key] = val
+                elif (key in DEFAULTS and isinstance(DEFAULTS[key], float)
+                        and isinstance(val, int) and not isinstance(val, bool)):
+                    # 3 where 3.0 was meant. json does not know the difference
+                    # and a person editing the file by hand should not have to.
+                    cfg[key] = float(val)
+    except (OSError, ValueError):
+        pass
+    return cfg
+
+
+def save_config(cfg, path=None):
+    ziel = path or CONFIG
+    os.makedirs(os.path.dirname(ziel), exist_ok=True)
+    # Written beside the target and renamed: a phone that loses power halfway
+    # through this should find the old file, not half of the new one.
+    tmp = ziel + ".neu"
+    with open(tmp, "w") as fh:
+        json.dump({k: cfg[k] for k in sorted(cfg)}, fh, indent=2)
+        fh.write("\n")
+    os.replace(tmp, ziel)
+
+
+# ------------------------------------------------------------------- Messung
+
+def _read(name, base=None):
+    try:
+        with open(os.path.join(base or SYSFS, name)) as fh:
+            return fh.read().strip()
+    except OSError:
+        return None
+
+
+def read_battery(base=None):
+    """What the battery is doing right now, or None if it cannot be read.
+
+    Sign is deliberately thrown away. Some drivers count discharge negative,
+    some do not, and this one has only ever been seen charging - `status` is
+    the reliable statement of direction, so the current is only ever asked how
+    MUCH, never which way.
+    """
+    status = _read("status", base)
+    strom = _read("current_now", base)
+    spannung = _read("voltage_now", base)
+    if status is None or strom is None or spannung is None:
+        return None
+    try:
+        ampere = abs(int(strom)) / 1e6
+        volt = int(spannung) / 1e6
+    except ValueError:
+        return None
+    watt = ampere * volt
+    return {
+        "status": status,
+        "ampere": ampere,
+        "volt": volt,
+        "watt": watt,
+        "charging": status == "Charging",
+        # "Full" and "Not charging" are neither: the cable is in and nothing
+        # is moving. Colouring that red would be a fault report for a phone
+        # that is simply done.
+        "moving": status in ("Charging", "Discharging"),
+        "plausible": watt <= MAX_PLAUSIBLE_W,
+    }
+
+
+def median(werte):
+    s = sorted(werte)
+    n = len(s)
+    if not n:
+        return None
+    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2.0
+
+
+def bucket_for(watt, charging, cfg, current=None):
+    """Which of the three colours this wattage is, given the one showing now.
+
+    `current` is what makes it hysteresis rather than a threshold: leaving a
+    colour costs a tenth more than entering it did, so a reading that sits on
+    a boundary and wobbles stays where it is.
+    """
+    h = cfg["hysteresis"]
+    if charging:
+        gruen, gelb = cfg["charge_green_w"], cfg["charge_amber_w"]
+        if current == "green":
+            gruen *= 1 - h
+        elif current == "amber":
+            gruen *= 1 + h
+            gelb *= 1 - h
+        elif current == "red":
+            gelb *= 1 + h
+        if watt >= gruen:
+            return "green"
+        return "amber" if watt >= gelb else "red"
+    # On battery the scale is upside down: little is good.
+    gruen, gelb = cfg["drain_green_w"], cfg["drain_amber_w"]
+    if current == "green":
+        gruen *= 1 + h
+    elif current == "amber":
+        gruen *= 1 - h
+        gelb *= 1 + h
+    elif current == "red":
+        gelb *= 1 - h
+    if watt <= gruen:
+        return "green"
+    return "amber" if watt <= gelb else "red"
+
+
+def wanted_bucket(mess, cfg, current=None):
+    """The colour the icon should have, or None for "leave it alone"."""
+    if mess is None or not mess["plausible"] or not mess["moving"]:
+        return None
+    if mess["charging"] and not cfg["charging"]:
+        return None
+    if not mess["charging"] and not cfg["discharging"]:
+        return None
+    return bucket_for(mess["watt"], mess["charging"], cfg, current)
+
+
+# -------------------------------------------------------------------- Themes
+
+def base_name(name):
+    """The user's own theme behind a name that may be one of ours."""
+    if not name:
+        return name
+    kopf, _, rest = name.rpartition(MARK)
+    if kopf and rest in BUCKETS:
+        return kopf
+    return name
+
+
+def theme_name(base, bucket):
+    return base + MARK + bucket
+
+
+def base_css(base):
+    """Where the user's theme keeps its GTK3 stylesheets.
+
+    Returns (light, dark); dark is None when the theme has none. That case
+    matters: GTK3 picks gtk-dark.css when it exists and the session prefers
+    dark, so writing one for a theme that has none would make dark mode use
+    the light stylesheet - the colour would work and the whole phone would
+    change appearance.
+    """
+    for ordner in THEME_DIRS:
+        gtk3 = os.path.join(ordner, base, "gtk-3.0")
+        hell = os.path.join(gtk3, "gtk.css")
+        if os.path.isfile(hell):
+            dunkel = os.path.join(gtk3, "gtk-dark.css")
+            return hell, (dunkel if os.path.isfile(dunkel) else None)
+    # Adwaita and HighContrast have no files: GTK3 carries them as resources.
+    # Anything else with no stylesheet on disk is a theme we cannot build on,
+    # and the caller says so rather than writing a theme that renders the
+    # phone unstyled.
+    eingebaut = {
+        "Adwaita": ("Adwaita", "gtk-contained.css", "gtk-contained-dark.css"),
+        "Adwaita-dark": ("Adwaita", "gtk-contained-dark.css", None),
+        "HighContrast": ("HighContrast", "gtk-contained.css",
+                         "gtk-contained-inverse.css"),
+    }
+    if base in eingebaut:
+        ordner, hell, dunkel = eingebaut[base]
+        pfad = "resource:///org/gtk/libgtk/theme/" + ordner + "/"
+        return pfad + hell, (pfad + dunkel if dunkel else None)
+    return None, None
+
+
+def _import(ziel):
+    # An @import keeps the original file the original file: everything it
+    # loads by relative path - assets, the libadwaita part, the lot - still
+    # resolves against where IT lives, not where our copy does.
+    if ziel.startswith("resource:"):
+        return '@import url("%s");\n' % ziel
+    return '@import url("file://%s");\n' % ziel
+
+
+def write_themes(base, themes_dir=None, colors=None):
+    """Write the three colour themes. Returns the names, or [] if it cannot.
+
+    Generated every start rather than once: the user's theme may have been
+    updated by a package, and a stale copy of its name with a fresh
+    stylesheet underneath is the kind of difference nobody would look for.
+    """
+    hell, dunkel = base_css(base)
+    if hell is None:
+        return []
+    wurzel = themes_dir or THEMES
+    farben = colors or COLORS
+    namen = []
+    for bucket in BUCKETS:
+        name = theme_name(base, bucket)
+        gtk3 = os.path.join(wurzel, name, "gtk-3.0")
+        os.makedirs(gtk3, exist_ok=True)
+        regel = ("/* Written by battctl (furios_battery). Deleted by "
+                 "`battctl restore`. */\n"
+                 "phosh-battery-info image { color: %s; }\n" % farben[bucket])
+        with open(os.path.join(gtk3, "gtk.css"), "w") as fh:
+            fh.write(_import(hell) + regel)
+        dunkelziel = os.path.join(gtk3, "gtk-dark.css")
+        if dunkel:
+            with open(dunkelziel, "w") as fh:
+                fh.write(_import(dunkel) + regel)
+        elif os.path.exists(dunkelziel):
+            # The base theme lost its dark sheet between two runs.
+            os.unlink(dunkelziel)
+        namen.append(name)
+    return namen
+
+
+def remove_themes(themes_dir=None):
+    """Take every theme of ours off the disk. Returns how many went."""
+    wurzel = themes_dir or THEMES
+    weg = 0
+    try:
+        eintraege = sorted(os.listdir(wurzel))
+    except OSError:
+        return 0
+    for name in eintraege:
+        if base_name(name) == name:
+            continue                      # not one of ours
+        pfad = os.path.join(wurzel, name)
+        marker = os.path.join(pfad, "gtk-3.0", "gtk.css")
+        try:
+            with open(marker) as fh:
+                if "battctl" not in fh.read(200):
+                    continue              # same name, somebody else's file
+        except OSError:
+            continue
+        for ordner, _, dateien in os.walk(pfad, topdown=False):
+            for datei in dateien:
+                os.unlink(os.path.join(ordner, datei))
+            os.rmdir(ordner)
+        weg += 1
+    return weg
+
+
+# ------------------------------------------------------- die Einstellung selbst
+
+class Setting:
+    """The gtk-theme key, through `gsettings`.
+
+    The command line rather than Gio.Settings on purpose: this has to work
+    from a test and from a terminal over ssh, and a schema object bound to a
+    session bus does neither without ceremony. One process per change, and
+    changes are rare by design.
+    """
+
+    def __init__(self, datei=None):
+        # Tests point this at a file instead of dconf. Nothing else does.
+        self.datei = datei or os.environ.get("FURIOS_BATTERY_SETTING_FILE")
+
+    def get(self):
+        if self.datei:
+            try:
+                with open(self.datei) as fh:
+                    return fh.read().strip()
+            except OSError:
+                return ""
+        try:
+            aus = subprocess.run(["gsettings", "get"] + SETTING.split(),
+                                 capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        return aus.stdout.strip().strip("'")
+
+    def set(self, name):
+        if self.datei:
+            with open(self.datei, "w") as fh:
+                fh.write(name + "\n")
+            return True
+        try:
+            aus = subprocess.run(["gsettings", "set"] + SETTING.split() + [name],
+                                 capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return aus.returncode == 0
+
+
+# -------------------------------------------------------------------- Zustand
+
+def describe(cfg=None, setting=None, base=None):
+    """Everything both front ends show, in one dict."""
+    cfg = cfg or load_config()
+    setting = setting or Setting()
+    mess = read_battery()
+    jetzt = setting.get()
+    basis = base or base_name(jetzt)
+    aktiv = jetzt != basis
+    bucket = wanted_bucket(mess, cfg, jetzt[len(basis) + len(MARK):] if aktiv else None)
+    hell, _ = base_css(basis)
+    return {
+        "state": (mess or {}).get("status", "unknown"),
+        "watt": round((mess or {}).get("watt", 0.0), 2),
+        "ampere": round((mess or {}).get("ampere", 0.0), 3),
+        "volt": round((mess or {}).get("volt", 0.0), 3),
+        "readable": mess is not None,
+        "plausible": (mess or {}).get("plausible", False),
+        "bucket": bucket or "none",
+        "showing": jetzt[len(basis) + len(MARK):] if aktiv else "none",
+        "theme": jetzt,
+        "base_theme": basis,
+        # A theme we cannot build on is the one failure that leaves everything
+        # else looking healthy, so it is stated rather than implied.
+        "can_theme": hell is not None,
+        "config": cfg,
+    }
+
+
+def cmd_status(argv):
+    zustand = describe()
+    if "--json" in argv:
+        print(json.dumps(zustand, indent=2, sort_keys=True))
+        return 0 if zustand["readable"] else 1
+    cfg = zustand["config"]
+    print("state:        %s" % zustand["state"])
+    if zustand["readable"]:
+        print("power:        %.2f W (%.3f A at %.3f V)"
+              % (zustand["watt"], zustand["ampere"], zustand["volt"]))
+    else:
+        print("power:        not readable (%s)" % SYSFS)
+    print("colour:       %s" % zustand["showing"])
+    print("would be:     %s" % zustand["bucket"])
+    print("base theme:   %s" % zustand["base_theme"])
+    print("theme now:    %s" % zustand["theme"])
+    if not zustand["can_theme"]:
+        print("             ! no GTK3 stylesheet found for that theme - "
+              "nothing can be coloured")
+    print("charging:     %s (green from %.1f W, amber from %.1f W)"
+          % ("on" if cfg["charging"] else "off",
+             cfg["charge_green_w"], cfg["charge_amber_w"]))
+    print("discharging:  %s (green to %.1f W, amber to %.1f W)"
+          % ("on" if cfg["discharging"] else "off",
+             cfg["drain_green_w"], cfg["drain_amber_w"]))
+    return 0 if zustand["readable"] else 1
+
+
+# Which config keys `battctl config` will take, and how to read the value.
+SCHALTER = ("charging", "discharging")
+ZAHLEN = ("charge_green_w", "charge_amber_w", "drain_green_w", "drain_amber_w",
+          "dwell_s", "window_s", "hysteresis")
+
+
+def cmd_config(argv):
+    cfg = load_config()
+    if not argv:
+        for key in sorted(cfg):
+            print("%s: %s" % (key, cfg[key]))
+        return 0
+    if len(argv) != 2:
+        print("Usage: battctl config <key> <value>", file=sys.stderr)
+        return 2
+    key, wert = argv
+    key = key.replace("-", "_")
+    if key in SCHALTER:
+        if wert not in ("on", "off"):
+            print("%s takes on or off." % key, file=sys.stderr)
+            return 2
+        cfg[key] = wert == "on"
+    elif key in ZAHLEN:
+        try:
+            zahl = float(wert)
+        except ValueError:
+            print("%s takes a number." % key, file=sys.stderr)
+            return 2
+        if zahl <= 0:
+            print("%s must be greater than zero." % key, file=sys.stderr)
+            return 2
+        cfg[key] = int(zahl) if isinstance(DEFAULTS[key], int) else zahl
+    else:
+        print("Unknown setting: %s" % key, file=sys.stderr)
+        print("Known: %s" % " ".join(sorted(SCHALTER + ZAHLEN)), file=sys.stderr)
+        return 2
+    # Thresholds that cross would make one colour unreachable, and the reason
+    # would be two numbers in a file nobody opens.
+    if cfg["charge_green_w"] <= cfg["charge_amber_w"]:
+        print("charge_green_w must be above charge_amber_w.", file=sys.stderr)
+        return 2
+    if cfg["drain_green_w"] >= cfg["drain_amber_w"]:
+        print("drain_green_w must be below drain_amber_w.", file=sys.stderr)
+        return 2
+    save_config(cfg)
+    print("%s: %s" % (key, cfg[key]))
+    return 0
+
+
+def cmd_reset(_argv):
+    """Put the user's own theme back. Idempotent, and safe to call twice."""
+    setting = Setting()
+    jetzt = setting.get()
+    basis = base_name(jetzt)
+    if jetzt == basis:
+        return 0
+    return 0 if setting.set(basis) else 1
+
+
+def cmd_restore(_argv):
+    """Back to how the phone shipped: own theme, no colour themes, no config.
+
+    The service is not stopped here - it is the app's switch and systemd's
+    business, and a tool that disables the unit somebody just enabled would
+    be fighting its own front end. The daemon notices the themes are gone and
+    writes them again, which is why the app stops the service first.
+    """
+    cmd_reset([])
+    weg = remove_themes()
+    try:
+        os.unlink(CONFIG)
+    except OSError:
+        pass
+    print("Own theme restored, %d colour theme(s) removed." % weg)
+    return 0
+
+
+# --------------------------------------------------------------------- Daemon
+
+class Daemon:
+    """The loop: read, smooth, decide, and only then touch the setting."""
+
+    def __init__(self, cfg=None, setting=None, jetzt=None):
+        self.cfg = cfg or load_config()
+        self.setting = setting or Setting()
+        self.samples = []                 # (Zeitpunkt, Watt, laedt)
+        self.showing = None               # der Name der Farbe, nicht des Themes
+        self.last_change = 0.0
+        self.last_good = 0.0              # wann zuletzt etwas Brauchbares kam
+        self.cfg_stamp = self._stamp()
+        self.base = base_name(jetzt if jetzt is not None else self.setting.get())
+        self.themes = []
+
+    @staticmethod
+    def _stamp(pfad=None):
+        try:
+            zustand = os.stat(pfad or CONFIG)
+        except OSError:
+            return None
+        return (zustand.st_mtime_ns, zustand.st_size)
+
+    def reload(self):
+        """Take a changed config without being restarted.
+
+        The app switches "also on battery" by writing that file, and a daemon
+        that only read it at startup would leave the switch looking broken
+        until the next boot - the setting would be saved, and nothing would
+        happen. Checked by timestamp, so the ordinary tick costs one stat().
+        """
+        stempel = self._stamp()
+        if stempel == self.cfg_stamp:
+            return False
+        self.cfg_stamp = stempel
+        self.cfg = load_config()
+        return True
+
+    def ensure_themes(self):
+        self.themes = write_themes(self.base)
+        return bool(self.themes)
+
+    def adopt(self, name):
+        """Somebody changed the theme while we were running.
+
+        If it is not one of ours, it is a decision, and everything we generated
+        is now built on the wrong base. Rebuild against the new one and carry
+        the colour over.
+        """
+        if base_name(name) == self.base:
+            return False
+        self.base = base_name(name)
+        self.showing = None
+        self.ensure_themes()
+        return True
+
+    def sample(self, now=None, mess=None):
+        now = time.time() if now is None else now
+        mess = read_battery() if mess is None else mess
+        if mess is None or not mess["plausible"]:
+            return None
+        self.samples.append((now, mess["watt"], mess["charging"]))
+        grenze = now - self.cfg["window_s"]
+        self.samples = [s for s in self.samples if s[0] >= grenze]
+        return mess
+
+    def decide(self, mess, now=None):
+        """The colour to show, from the median of the window - not from the
+        last reading. current_now swings by a quarter of an amp between two
+        reads of the same steady charge."""
+        now = time.time() if now is None else now
+        if mess is None or not mess["moving"]:
+            return None
+        gleich = [w for (_, w, c) in self.samples if c == mess["charging"]]
+        mitte = median(gleich) if gleich else mess["watt"]
+        glatt = dict(mess)
+        glatt["watt"] = mitte
+        return wanted_bucket(glatt, self.cfg, self.showing)
+
+    def apply(self, bucket, now=None):
+        """Set the theme, if the colour really is a different one and it has
+        been showing long enough. Returns True when the setting was written."""
+        now = time.time() if now is None else now
+        if bucket == self.showing:
+            return False
+        if self.showing is not None and now - self.last_change < self.cfg["dwell_s"]:
+            return False
+        if bucket is not None and not self.themes and not self.ensure_themes():
+            return False
+        ziel = self.base if bucket is None else theme_name(self.base, bucket)
+        if not self.setting.set(ziel):
+            return False
+        self.showing = bucket
+        self.last_change = now
+        return True
+
+    def tick(self, now=None, mess=None):
+        now = time.time() if now is None else now
+        self.reload()
+        jetzt = self.setting.get()
+        if jetzt and self.adopt(jetzt):
+            pass
+        elif jetzt and base_name(jetzt) == self.base:
+            # Someone (a crash of ours, a second instance) left a colour on
+            # that we are not tracking. Adopt it so hysteresis and dwell start
+            # from what is on screen.
+            zeigt = jetzt[len(self.base) + len(MARK):] if jetzt != self.base else None
+            if zeigt in BUCKETS and self.showing is None:
+                self.showing = zeigt
+        gemessen = self.sample(now, mess)
+        if gemessen is None:
+            # Nothing readable this time. One failed read is not a reason to
+            # restyle every app on the phone, so the colour stays - but not
+            # for ever: a colour nothing can justify any more is worse than
+            # no colour, so once a whole window has gone by without a
+            # measurement it goes.
+            if (self.showing is not None
+                    and now - self.last_good > self.cfg["window_s"]):
+                return self.apply(None, now)
+            return False
+        self.last_good = now
+        return self.apply(self.decide(gemessen, now), now)
+
+
+def cmd_daemon(_argv):
+    import gi
+    gi.require_version("Gio", "2.0")
+    from gi.repository import Gio, GLib
+
+    class GioSetting(Setting):
+        """The same key, read and written inside this process.
+
+        The command line is right for a one-shot; for the daemon it is a
+        fork, an exec and a schema parse per tick, which measured 47 ms a
+        minute - not much, and all of it for a value we can hold. Same
+        class, so everything above it is unchanged.
+        """
+
+        def __init__(self):
+            super().__init__()
+            self.datei = None
+            schema, schluessel = SETTING.split()
+            self.gio = Gio.Settings.new(schema)
+            self.schluessel = schluessel
+
+        def get(self):
+            return self.gio.get_string(self.schluessel)
+
+        def set(self, name):
+            gesetzt = self.gio.set_string(self.schluessel, name)
+            # Written through before we call it done: the process may be
+            # asked to stop in the next moment, and a theme that only
+            # reaches dconf after we are gone is a theme nobody set.
+            Gio.Settings.sync()
+            return gesetzt
+
+    daemon = Daemon(setting=GioSetting())
+    if not daemon.ensure_themes():
+        print("No GTK3 stylesheet found for theme %r - nothing to colour."
+              % daemon.base, file=sys.stderr)
+        return 1
+    print("colouring the battery icon on top of %s" % daemon.base, flush=True)
+
+    schleife = GLib.MainLoop()
+
+    def aufwachen(*_):
+        try:
+            if daemon.tick():
+                print("%s -> %s" % (daemon.showing or "off",
+                                    daemon.setting.get()), flush=True)
+        except Exception as fehler:                  # noqa: BLE001
+            # A cosmetic daemon must not die of a surprise in one reading.
+            print("tick failed: %r" % (fehler,), file=sys.stderr, flush=True)
+        return True
+
+    def beenden(*_):
+        # The theme goes back before we do. A green icon left behind on a
+        # phone whose daemon is gone would be a lie that outlives it.
+        daemon.apply(None, now=time.time() + daemon.cfg["dwell_s"])
+        schleife.quit()
+        return True
+
+    # UPower is the clock. It already polls the battery for every other
+    # program on the phone and emits a signal when a value moves, so riding
+    # along costs no wake-ups of our own - and the alternative, a timer of
+    # ours, is exactly the kind of thing that turned out to cost half a
+    # percent of a core in a sibling project.
+    #
+    # The proxy is KEPT, not left to the garbage collector: a subscription
+    # whose connection is dropped expires silently - no error, no log line, a
+    # healthy-looking service that never measures anything. That has happened
+    # here before.
+    proxy = None
+    try:
+        bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        proxy = Gio.DBusProxy.new_sync(
+            bus, Gio.DBusProxyFlags.DO_NOT_AUTO_START, None,
+            "org.freedesktop.UPower",
+            "/org/freedesktop/UPower/devices/battery_battery",
+            "org.freedesktop.UPower.Device", None)
+        proxy.connect("g-properties-changed", aufwachen)
+    except GLib.Error as fehler:
+        print("no UPower to listen to (%s) - falling back to the timer alone"
+              % fehler.message, file=sys.stderr, flush=True)
+        proxy = None
+
+    # The safety net, and the whole answer when there is no UPower: a slow
+    # timer. It also covers the case the comment above warns about - if the
+    # subscription ever dies, the colour keeps following, just later.
+    GLib.timeout_add_seconds(120, aufwachen)
+    # GLibUnix where it exists, GLib where it does not: pygobject moved
+    # unix_signal_add and warns twice into the journal on every start
+    # otherwise - two lines that would be in every log for ever, saying
+    # nothing about this phone.
+    try:
+        gi.require_version("GLibUnix", "2.0")
+        from gi.repository import GLibUnix
+        signal_add = GLibUnix.signal_add
+    except (ValueError, ImportError):
+        signal_add = GLib.unix_signal_add
+    signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, beenden)
+    signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, beenden)
+
+    aufwachen()
+    schleife.run()
+    # Referenced after the loop so nothing can decide the proxy was unused.
+    del proxy
+    return 0
+
+
+USAGE = """battctl - colour phosh's battery icon by charge power
+
+  battctl status [--json]     what the battery is doing and which colour shows
+  battctl config              every setting and its value
+  battctl config <key> <val>  charging|discharging on|off, or a threshold in W
+  battctl daemon              the loop; this is what the service runs
+  battctl reset               put the user's own theme back
+  battctl restore             reset, plus remove the colour themes and config
+
+The service is what turns this on and off:
+  systemctl --user enable --now furios-battery-color.service
+"""
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(USAGE, end="")
+        return 0
+    befehl, rest = argv[0], argv[1:]
+    for name, fn in (("status", cmd_status), ("config", cmd_config),
+                     ("daemon", cmd_daemon), ("reset", cmd_reset),
+                     ("restore", cmd_restore)):
+        if befehl == name:
+            return fn(rest)
+    print("Unknown command: %s" % befehl, file=sys.stderr)
+    print(USAGE, end="", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

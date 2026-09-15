@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 misc-de
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Colour the battery icon by charge power
+Documentation=file:%h/.local/share/doc/furios-battery/README.md
+# The colour is a GTK theme, and phosh has to be there to be restyled. Not a
+# hard dependency: started too early it simply sets the theme and phosh reads
+# it when it comes up.
+After=mobi.phosh.Shell.service
+PartOf=graphical-session.target
+# StartLimit* belong in [Unit] - in [Service] systemd parses them and throws
+# them away. And the limit has to be reachable: 5 starts of 5 seconds fit
+# inside 60. Giving up is the right answer here, unlike for the watchers in
+# the audio and modem projects: nothing goes unwatched if the icon stays the
+# colour it always was.
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/battctl daemon
+# The theme goes back whatever happens - the daemon does it on SIGTERM, and
+# this catches the rest, including a kill -9. A phone left showing a green
+# battery by a daemon that is gone would be worse than no colour at all.
+ExecStopPost=%h/.local/bin/battctl reset
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=gnome-session.target
