@@ -58,21 +58,27 @@ def symbol(name, huelle, fuellung):
 
 
 # (Ueberschrift, [(Symbolname, Huelle, Fuellung, Beschriftung)])
+#
+# Die Entlade-Symbole kommen aus ~/.local/share/icons, wenn battctl sie
+# dorthin geschrieben hat - GTK sucht dort zuerst, und nur dort haben sie
+# eine eigene Fuellflaeche. Ohne sie zeigt die mittlere Reihe eine Farbe
+# statt zweier, und die Tafel sagt damit die Wahrheit ueber das Telefon,
+# auf dem sie gezeichnet wurde.
 TAFEL = [
-    ("Laden - die Huelle sagt, wie schnell", [
+    ("Laden - der Rahmen sagt, wie schnell", [
         ("battery-level-80-charging-symbolic", "green", None, "ab 7 W"),
         ("battery-level-80-charging-symbolic", "amber", None, "3-7 W"),
         ("battery-level-80-charging-symbolic", "red", None, "unter 3 W"),
     ]),
-    ("Akkubetrieb - ein Pfad, also eine Farbe", [
+    ("Akkubetrieb - der Rahmen sagt, wie viel gezogen wird", [
         ("battery-level-80-symbolic", None, None, "unter 2 W"),
-        ("battery-level-80-symbolic", "amber", "amber", "2-4 W"),
-        ("battery-level-80-symbolic", "red", "red", "ab 4 W"),
+        ("battery-level-80-symbolic", "amber", None, "2-4 W"),
+        ("battery-level-80-symbolic", "red", None, "ab 4 W"),
     ]),
-    ("Ladestand - die Fuellung sagt, wie voll", [
-        ("battery-level-80-charging-symbolic", "green", None, "ueber 60 %"),
-        ("battery-level-40-charging-symbolic", "green", "amber", "15-60 %"),
-        ("battery-level-10-charging-symbolic", "green", "red", "unter 15 %"),
+    ("Fuellung - der Ladestand, in beiden Faellen", [
+        ("battery-level-80-symbolic", None, None, "ueber 60 %"),
+        ("battery-level-40-symbolic", None, "amber", "15-60 %"),
+        ("battery-level-10-symbolic", "red", "red", "unter 15 %"),
     ]),
 ]
 

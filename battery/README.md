@@ -10,7 +10,7 @@ verschiedene Dinge:
 
 | | was es sagt | |
 |---|---|---|
-| **Huelle und Blitz** | wie schnell sich der Akku bewegt | gruen · orange · rot |
+| **Rahmen und Blitz** | wie schnell sich der Akku bewegt | gruen · orange · rot |
 | **Fuellung** | wie voll er ist | schlicht · orange · rot |
 
 Also: **gruen**, wenn viel hineingeht, **orange** dazwischen, **rot**, wenn
@@ -32,12 +32,18 @@ Telefon zwischen Laden und Entladen springen. Der Huelle folgt das **nicht**:
 sie bleibt farblos, solange sich die Messungen einer Minute nicht ueber die
 Richtung einig sind. Sonst waere die Farbe eine Anzeige des Kabels.
 
-**Zwei Einschraenkungen, die vom Symbol kommen, nicht von uns** (Details in
-FINDINGS.md): Adwaitas Entlade-Symbole bestehen aus EINEM Pfad — dort gibt
-es keine zwei Haelften, und die dringlichere der beiden Farben bekommt das
-ganze Symbol. Und wenn Kernel und UPower sich ueber die Richtung
-widersprechen, bleibt die Huelle farblos, weil phosh dann ein Symbol
-zeichnet, zu dem die Farbe nicht passt.
+Damit das im Akkubetrieb ueberhaupt geht, legt `battctl` acht Symbolen eine
+eigene Fuellflaeche unter: Adwaita zeichnet die Entlade-Batterie als EINEN
+Pfad, in dem der Ladestand steckt, und kein CSS kommt dort allein hin. Die
+Kopien liegen in `~/.local/share/icons/Adwaita/symbolic/status`, sind bis
+auf die zusaetzliche Flaeche identisch mit den Originalen (die unberuehrt
+bleiben) und verschwinden mit `battctl restore`. Wo eine solche Kopie fehlt,
+faellt die Anzeige auf eine Farbe fuers ganze Symbol zurueck — die
+dringlichere der beiden.
+
+Und wenn Kernel und UPower sich ueber die Richtung widersprechen, bleibt der
+Rahmen farblos: phosh zeichnet dann ein Symbol, zu dem die Farbe nicht
+passt. Details in FINDINGS.md.
 
 ```
 git clone https://github.com/misc-de/furios_misc
@@ -186,5 +192,5 @@ tests/run-tests.sh      # ohne Display, ohne Akku, ohne root - NIE mit sudo
 tests/coverage.sh
 ```
 
-140 Tests, 89,8 % der Zeilen. Was fehlt, ist die D-Bus-Verdrahtung des Daemons
+151 Tests, 89,3 % der Zeilen. Was fehlt, ist die D-Bus-Verdrahtung des Daemons
 — die wird am Geraet belegt, nicht simuliert (FINDINGS.md).

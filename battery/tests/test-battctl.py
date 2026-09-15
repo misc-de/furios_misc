@@ -375,6 +375,19 @@ class Symbolfamilien(Basis):
         self.assertEqual(b.wanted_level(b.read_battery(), dict(b.DEFAULTS)),
                          "red")
 
+    def test_der_name_den_phosh_zeichnet(self):
+        """Nicht UPowers `icon-name`: phosh baut
+        "battery-level-%d-symbolic" selbst, und die beiden Dateien sind
+        nicht einmal gleich gebaut."""
+        self.assertEqual(b.phosh_icon(87, False), "battery-level-90-symbolic")
+        self.assertEqual(b.phosh_icon(87, True),
+                         "battery-level-90-charging-symbolic")
+        self.assertEqual(b.phosh_icon(4, False), "battery-level-0-symbolic")
+        self.assertEqual(b.phosh_icon(100, False), "battery-level-100-symbolic")
+        # Ausser Reichweite und unbekannt, beides ohne Absturz
+        self.assertEqual(b.phosh_icon(140, False), "battery-level-100-symbolic")
+        self.assertEqual(b.phosh_icon(None, False), "battery-level-100-symbolic")
+
     def test_eine_haelfte_bekommt_die_dringlichere_farbe(self):
         self.assertEqual(b.merge_colours("green", "red"), "red")
         self.assertEqual(b.merge_colours("red", "amber"), "red")
@@ -402,6 +415,94 @@ class Symbolfamilien(Basis):
         os.environ.pop("FURIOS_BATTERY_ICON", None)
         os.environ["PATH"] = os.path.join(self.tmp, "leer")
         self.assertIsNone(b.upower_icon())
+
+
+class EigeneSymbole(Basis):
+    """Die Kopien der Entlade-Symbole, denen eine eigene Fuellflaeche
+    untergelegt ist."""
+
+    def setUp(self):
+        super().setUp()
+        self.quelle = os.path.join(self.tmp, "adwaita")
+        self.ziel = os.path.join(self.tmp, "eigene")
+        os.makedirs(self.quelle)
+
+    def original(self, level, klasse=False):
+        pfad = os.path.join(self.quelle, "battery-level-%d-symbolic.svg" % level)
+        with open(pfad, "w") as fh:
+            fh.write('<svg height="16px" width="16px">\n'
+                     + ('<path class="success" d="m 5 7"/>\n' if klasse else "")
+                     + '<path d="m 7 0 c -1 0"/>\n</svg>')
+        return pfad
+
+    def test_die_fuellflaeche_kommt_dazu(self):
+        self.original(90)
+        namen = b.write_split_icons(self.ziel, self.quelle)
+        self.assertEqual(namen, ["battery-level-90-symbolic.svg"])
+        text = open(os.path.join(self.ziel, namen[0])).read()
+        self.assertIn('class="success"', text)
+        # 90 % sind sieben von acht Einheiten, unten bei 13 angeschlagen
+        self.assertIn('d="m 5 6 h 6 v 7 h -6 z"', text)
+        self.assertIn("battctl", text)
+
+    def test_die_geometrie_stimmt_je_stufe(self):
+        for level, erwartet in ((100, "m 5 5 h 6 v 8 h -6 z"),
+                                (50, "m 5 9 h 6 v 4 h -6 z"),
+                                (30, "m 5 11 h 6 v 2 h -6 z")):
+            self.original(level)
+            b.write_split_icons(self.ziel, self.quelle)
+            text = open(os.path.join(
+                self.ziel, "battery-level-%d-symbolic.svg" % level)).read()
+            self.assertIn(erwartet, text, level)
+
+    def test_was_schon_zwei_flaechen_hat_bleibt_unberuehrt(self):
+        self.original(20, klasse=True)
+        self.assertEqual(b.write_split_icons(self.ziel, self.quelle), [])
+
+    def test_ein_leerer_akku_hat_nichts_zu_faerben(self):
+        self.original(0)
+        self.assertEqual(b.write_split_icons(self.ziel, self.quelle), [])
+
+    def test_zweimal_schreiben_aendert_nichts(self):
+        self.original(90)
+        b.write_split_icons(self.ziel, self.quelle)
+        pfad = os.path.join(self.ziel, "battery-level-90-symbolic.svg")
+        vorher = os.stat(pfad).st_mtime_ns
+        b.write_split_icons(self.ziel, self.quelle)
+        self.assertEqual(vorher, os.stat(pfad).st_mtime_ns)
+
+    def test_fehlende_quelle_ist_kein_absturz(self):
+        self.assertEqual(b.write_split_icons(self.ziel, self.quelle), [])
+        self.assertIsNone(b.split_icon_svg("/gibt/es/nicht", 50))
+
+    def test_entfernt_werden_nur_unsere(self):
+        self.original(90)
+        b.write_split_icons(self.ziel, self.quelle)
+        fremd = os.path.join(self.ziel, "battery-level-50-symbolic.svg")
+        with open(fremd, "w") as fh:
+            fh.write("<svg>von jemand anderem</svg>")
+        self.assertEqual(b.remove_split_icons(self.ziel), 1)
+        self.assertTrue(os.path.exists(fremd))
+
+    def test_entfernen_ohne_verzeichnis(self):
+        self.assertEqual(b.remove_split_icons(self.ziel), 0)
+
+    def test_danach_gilt_das_symbol_als_geteilt(self):
+        """Der Zweck der ganzen Uebung: auf dem Entlade-Symbol sind es ab
+        jetzt zwei Flaechen."""
+        self.original(90)
+        b.write_split_icons(self.ziel, self.quelle)
+        # In der Form, in der GTK sie sucht: <dir>/Adwaita/symbolic/status
+        wurzel = os.path.join(self.tmp, "ikonen")
+        echt = os.path.join(wurzel, "Adwaita", "symbolic", "status")
+        os.makedirs(echt)
+        b.write_split_icons(echt, self.quelle)
+        alte = list(b.ICON_DIRS)
+        b.ICON_DIRS[:] = [wurzel]
+        try:
+            self.assertTrue(b.icon_is_split("battery-level-90-symbolic"))
+        finally:
+            b.ICON_DIRS[:] = alte
 
 
 class Namen(Basis):
@@ -816,7 +917,8 @@ class Befehle(Basis):
         self.set_theme(b.theme_name("base", "red"))
         rc, aus, _ = self.run_cmd("restore")
         self.assertEqual(rc, 0)
-        self.assertIn("3 colour theme(s) removed", aus)
+        self.assertIn("3 colour theme(s)", aus)
+        self.assertIn("icon copies removed", aus)
         self.assertEqual(b.Setting().get(), "base")
         self.assertFalse(os.path.exists(b.CONFIG))
         self.assertEqual(b.load_config(), b.DEFAULTS)

@@ -157,11 +157,33 @@ Von den zwoelf Entlade-Symbolen haben nur drei (0, 10, 20 %) einen zweiten
 Pfad — dort faerbt Adwaita den Rest selbst warnend ein. Bei den anderen neun
 gibt es schlicht keine zwei Haelften, und `color` malt das ganze Symbol.
 
-Konsequenz: die Trennung „Huelle = Leistung, Fuellung = Ladestand" gilt nur,
-wo das Symbol sie hergibt. Auf einem Symbol aus einem Stueck bekommt die
-**dringlichere** der beiden Farben das ganze Symbol (rot > orange > gruen >
-gar nichts) — keine der beiden Aussagen verschwindet still, uebrig bleibt
-„hier ist etwas beachtenswert", und mehr kann eine einzige Form nicht sagen.
+Konsequenz zunaechst: die Trennung „Rahmen = Leistung, Fuellung =
+Ladestand" gilt nur, wo das Symbol sie hergibt. Auf einem Symbol aus einem
+Stueck bekommt die **dringlichere** der beiden Farben das ganze Symbol
+(rot > orange > gruen > gar nichts).
+
+**GELOEST, indem wir dem Symbol die fehlende Flaeche untergelegt haben**
+(Wunsch des Nutzers, 15.9. abends: im Akkubetrieb nur den Rahmen faerben
+und den Ladestand getrennt zeigen). Der Fuellstand ist in diesen Dateien
+ein eigener Teilpfad, aber in relativen Koordinaten — ihn herauszuloesen
+hiesse, den Pfad zu parsen. Stattdessen kommt ein identisches Rechteck mit
+`class="success"` OBEN drauf; die Geometrie ist die des Symbols selbst
+(x 5, Breite 6, Boden bei 13, eine Einheit je 12,5 %) und wurde gegen die
+Originale bei 100, 90, 50 und 30 % geprueft — das Rechteck deckt die
+urspruengliche Flaeche exakt, kein Rand blitzt durch.
+
+Die acht Kopien liegen in `~/.local/share/icons/Adwaita/symbolic/status`
+und beschatten die Systemdateien NUR fuer diesen Nutzer; `/usr/share`
+bleibt unberuehrt. phosh hat sie ohne Neustart uebernommen. Ohne gesetzte
+Palette sehen sie aus wie die Originale, es aendert sich also nichts fuer
+andere Programme. Die Zusammenfuehrung oben bleibt als Rueckfallweg fuer
+Symbole, zu denen es keine Kopie gibt.
+
+**Und der Name, den phosh zeichnet, ist nicht der von UPower**: phosh baut
+`battery-level-%d-symbolic` selbst (im Programm nachgelesen), UPower meldet
+`battery-full-symbolic` — zwei verschiedene Dateien, aus zwei
+Verzeichnissen, verschieden gebaut. Wer die falsche befragt, bekommt die
+falsche Antwort auf „hat dieses Symbol zwei Flaechen".
 
 Welche Familie auf dem Schirm ist, wird nicht geraten: `battctl` fragt
 UPower nach `icon-name` (dieselbe Quelle, der phosh folgt), sucht die Datei

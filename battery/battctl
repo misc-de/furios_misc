@@ -161,10 +161,18 @@ DEFAULTS = {
     "window_s": 60,
 }
 
-# Where the icons live, and the device UPower publishes them for.
-ICON_DIRS = ["/usr/share/icons", "/usr/local/share/icons",
+# Where the icons live. The user's directories FIRST, which is the order
+# GTK searches in - a file of ours in ~/.local/share/icons/Adwaita shadows
+# the one in /usr/share for this user and for nobody else.
+ICON_DIRS = [os.path.expanduser("~/.icons"),
              os.path.expanduser("~/.local/share/icons"),
-             os.path.expanduser("~/.icons")]
+             "/usr/local/share/icons", "/usr/share/icons"]
+# Where our own copies go, and where the originals come from.
+ICON_HOME = os.path.expanduser("~/.local/share/icons/Adwaita/symbolic/status")
+ICON_SOURCE = "/usr/share/icons/Adwaita/symbolic/status"
+ICON_MARK = "<!-- battctl (furios_misc): filling split off so it can be "
+ICON_MARK_FULL = (ICON_MARK + "coloured on its own. Remove with "
+                  "`battctl restore`. -->")
 UPOWER_DEV = "/org/freedesktop/UPower/devices/battery_battery"
 
 # How urgent a colour is, for the case where only one of them fits.
@@ -183,6 +191,98 @@ def find_icon(name):
                 if os.path.isfile(pfad):
                     return pfad
     return None
+
+
+def phosh_icon(percent, charging):
+    """The icon name phosh builds for this reading.
+
+    Not UPower's `icon-name`: phosh makes its own out of
+    "battery-level-%d-symbolic" and the level rounded to tens, and the two
+    differ - UPower says battery-full-symbolic where phosh draws
+    battery-level-90-symbolic, and those two files are not even built the
+    same way. Asking the wrong one was giving the wrong answer about
+    whether the icon has two halves.
+    """
+    stufe = 100 if percent is None else max(0, min(100, int(round(percent / 10.0)) * 10))
+    return "battery-level-%d-%ssymbolic" % (stufe, "charging-" if charging else "")
+
+
+def split_icon_svg(quelle, level):
+    """The source SVG with a filling of its own laid over it.
+
+    Adwaita draws the discharge battery as a single path: outline, cut-out
+    and the level inside, all in one. Nothing in CSS can reach the level
+    alone. So an identical rectangle goes on top, carrying class="success",
+    and from then on the palette colours it - the geometry is the icon's
+    own (x 5, width 6, bottom at 13, one unit per 12.5 %), verified against
+    the originals at 100, 90, 50 and 30 %.
+
+    Returns None where there is nothing to do: an icon that already has a
+    class, or an empty battery with no filling to colour.
+    """
+    try:
+        with open(quelle) as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    if "class=" in text or ICON_MARK in text:
+        return None
+    hoehe = int(round(8 * level / 100.0))
+    if hoehe <= 0:
+        return None
+    rechteck = ('<path class="success" d="m 5 %d h 6 v %d h -6 z" '
+                'fill="#33d17a"/>' % (13 - hoehe, hoehe))
+    return text.replace("</svg>", ICON_MARK_FULL + "\n" + rechteck + "\n</svg>")
+
+
+def write_split_icons(ziel=None, quelle=None):
+    """Our copies of the discharge icons. Returns the names written."""
+    ziel = ziel or ICON_HOME
+    quelle = quelle or ICON_SOURCE
+    geschrieben = []
+    for level in range(0, 101, 10):
+        name = "battery-level-%d-symbolic.svg" % level
+        neu = split_icon_svg(os.path.join(quelle, name), level)
+        if neu is None:
+            continue
+        os.makedirs(ziel, exist_ok=True)
+        pfad = os.path.join(ziel, name)
+        try:
+            with open(pfad) as fh:
+                if fh.read() == neu:
+                    geschrieben.append(name)
+                    continue              # schon da und unveraendert
+        except OSError:
+            pass
+        with open(pfad, "w") as fh:
+            fh.write(neu)
+        geschrieben.append(name)
+    return geschrieben
+
+
+def remove_split_icons(ziel=None):
+    """Take our icon copies away again. Returns how many went.
+
+    Only ours: a file without the marker was put there by somebody else
+    and stays, even if the name matches.
+    """
+    ziel = ziel or ICON_HOME
+    weg = 0
+    try:
+        eintraege = sorted(os.listdir(ziel))
+    except OSError:
+        return 0
+    for name in eintraege:
+        pfad = os.path.join(ziel, name)
+        try:
+            with open(pfad) as fh:
+                if ICON_MARK not in fh.read():
+                    continue
+        except OSError:
+            continue
+        os.unlink(pfad)
+        weg += 1
+    return weg
 
 
 def icon_is_split(name, charging=False):
@@ -652,10 +752,16 @@ def describe(cfg=None, setting=None, base=None):
     basis = base or base_name(jetzt)
     zeigt, zeigt_stand = colours_of(jetzt)
     stand = wanted_level(mess, cfg, zeigt_stand)
-    symbol = upower_icon()
-    einig = sources_agree(mess, symbol)
+    # Two names: the one UPower publishes, which is what the direction
+    # comes from, and the one phosh actually draws, which is the file that
+    # decides whether there are two halves.
+    gemeldet = upower_icon()
+    einig = sources_agree(mess, gemeldet)
+    symbol = phosh_icon((mess or {}).get("percent"),
+                        (mess or {}).get("charging"))
     bucket = wanted_bucket(mess, cfg, zeigt, symbol)
     geteilt = icon_is_split(symbol, (mess or {}).get("charging"))
+    del gemeldet
     if not geteilt:
         bucket = stand = merge_colours(bucket, stand)
     hell, _ = base_css(basis)
@@ -801,11 +907,13 @@ def cmd_restore(_argv):
     """
     cmd_reset([])
     weg = remove_themes()
+    symbole = remove_split_icons()
     try:
         os.unlink(CONFIG)
     except OSError:
         pass
-    print("Own theme restored, %d colour theme(s) removed." % weg)
+    print("Own theme restored, %d colour theme(s) and %d icon copies removed."
+          % (weg, symbole))
     return 0
 
 
@@ -824,8 +932,10 @@ class Daemon:
         self.last_good = 0.0              # wann zuletzt etwas Brauchbares kam
         self.cfg_stamp = self._stamp()
         # The icon name UPower publishes, kept up to date by whoever drives
-        # the loop. It decides whether there are two halves to colour: the
-        # plain discharge icons are a single path.
+        # the loop. Used for ONE thing: telling whether UPower and the
+        # kernel agree about the direction. Which file is drawn is a
+        # different question, and phosh_icon() answers it - phosh builds
+        # its own name and the two are not the same.
         self.icon = None
         self.base = base_name(jetzt if jetzt is not None else self.setting.get())
 
@@ -953,7 +1063,8 @@ class Daemon:
         self.last_good = now
         huelle = self.decide(gemessen, now)
         fuellung = wanted_level(gemessen, self.cfg, self.showing[1])
-        if not icon_is_split(self.icon, gemessen["charging"]):
+        gezeichnet = phosh_icon(gemessen.get("percent"), gemessen["charging"])
+        if not icon_is_split(gezeichnet, gemessen["charging"]):
             # One shape, one colour. Saying both would mean the filling
             # silently overwriting the shell, or the other way round -
             # instead the more urgent of the two speaks for the whole icon.
@@ -999,6 +1110,14 @@ def cmd_daemon(_argv):
     veraltet = stale_themes()
     if veraltet:
         remove_themes(nur=veraltet)
+    # Our copies of the discharge icons, so the filling can be coloured on
+    # battery too. Identical to Adwaita's until something sets the palette,
+    # and only in this user's icon directory.
+    if daemon.cfg["level"]:
+        eigene = write_split_icons()
+        if eigene:
+            print("%d discharge icons with a filling of their own"
+                  % len(eigene), flush=True)
     if not can_theme(daemon.base):
         print("No GTK3 stylesheet found for theme %r - nothing to colour."
               % daemon.base, file=sys.stderr)
