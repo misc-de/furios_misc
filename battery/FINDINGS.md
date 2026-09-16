@@ -358,10 +358,63 @@ lock cycle and not on the next. What is left is to lift the blanking for as
 long as the phone is locked, so the lock screen looks exactly as it did
 before the option existed.
 
-`org.gnome.ScreenSaver.ActiveChanged` is dependable, and `SetActive` both
-locks **and unlocks** this session without a PIN — which is how the lock
-cycles above were driven. `loginctl lock-session` cannot: it answers
-"Session does not support lock screen".
+**But a strip created while the lock screen is already up sits above it.**
+Measured on 16.9.2026, phone locked, screen on, with a throw-away layer
+surface on OVERLAY and `grim` to read the bar: its label stood in the top bar
+of the lock screen. So what failed above was never the stacking, it was the
+moment — an output that is off. The way to the lock screen is a rebuild when
+the screen comes on while locked, and the signal for it is the one below.
+
+### `org.gnome.ScreenSaver` is not the lock state
+
+It was the source here, and it answers a different question. Measured on
+16.9.2026 with the lock screen on the display, `grim` for what was on screen:
+
+```
+lock screen on the display, nobody had unlocked anything
+org.gnome.ScreenSaver   GetActive     false
+login1 session c7       LockedHint    yes
+```
+
+phosh's own `screen-saver-manager.c` says why: `active` is set from the
+primary monitor's power mode, i.e. from the screen going **blank**, and the
+screen is lit again the moment the phone is picked up — long before anybody
+unlocks it. `GetActiveTime` is a third thing again: it counts from the
+lockscreen manager, and read 2853 s while `GetActive` said false.
+
+So the daemon believed "unlocked" for as long as a locked phone was in
+somebody's hand: it emptied phosh's percentage for a strip the lock screen
+covers, and the bar had **a battery icon and nothing beside it** — exactly
+the fault the blanking is lifted to avoid. Reported on 16.9.2026: "the time
+left is not shown on the lock screen".
+
+What phosh does publish on locking is logind's `LockedHint`, from the same
+file (`on_lockscreen_manager_locked_changed`, no warning in the journal ever).
+That is the source now, over `g-properties-changed` on the session object;
+`draw_time` reads the proxy's cached property on every tick as well, which is
+a local read and no bus traffic, so a missed signal costs one tick and not
+the evening.
+
+**The session has to be the graphical one.** There are four here, and the one
+this daemon runs in is not it:
+
+```
+ 1  manager   LockedHint=no     the systemd --user manager - never moves
+ 3  tty       LockedHint=no
+ 4  tty       LockedHint=no
+c7  wayland   LockedHint=yes    phosh
+```
+
+Asked for by name rather than guessed: `/org/freedesktop/login1/user/self`,
+property `Display`, which answers `c7`. Reading the manager session instead
+is what made this look like "phosh does not set the hint at all" for the
+first half hour — and the note that `loginctl lock-session` answers "Session
+does not support lock screen" was measured on that same wrong session. phosh
+does have a logind lock path (`on_logind_lock`); whether `lock-session c7`
+reaches it has not been tested.
+
+`SetActive` on `org.gnome.ScreenSaver` still both locks **and unlocks** this
+session without a PIN, which is how the lock cycles above were driven.
 
 ## 10 · A fork per reading is two thirds of the cost
 

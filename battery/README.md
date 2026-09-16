@@ -244,12 +244,21 @@ two strips side by side: the one started second covers the first. So the
 blanking is lifted for as long as the phone is locked, and the lock screen
 looks exactly as it did before this option existed.
 
-Going the other way, putting the strip back on top of the lock screen, needs
-a signal for "the screen came on while locked" and there is none to rely on:
-rebuilding on the lock itself leaves no strip at all - locking turns the
-panel off in the same breath, and a layer surface created against an output
-that is off is never configured - and `PowerSaveMode` was emitted on one lock
-and not on the next. Both measured on 16.9.2026.
+**Locked is logind's `LockedHint`**, on the graphical session, and not
+`org.gnome.ScreenSaver`. That was the first source here and it answers a
+different question: with the lock screen on the display, `GetActive` says
+*false*, because phosh keeps that flag in step with the screen going blank
+and the screen is lit again as soon as the phone is picked up. The percentage
+then stayed emptied for a strip nobody can see, and the lock screen showed a
+battery icon with nothing beside it (FINDINGS.md §9).
+
+Going the other way, putting the strip back on top of the lock screen, is now
+one step away rather than impossible: a layer surface created **while the
+lock screen is already up** does sit above it, measured on 16.9.2026 with a
+throw-away strip. What was missing was the signal, and `LockedHint` is it.
+Rebuilding on the lock itself still leaves no strip at all - locking turns
+the panel off in the same breath, and a layer surface created against an
+output that is off is never configured.
 
 **The cost**, and it is the reason this is off by default and worth knowing
 before switching it on: the switch in **phosh-mobile-settings → Top Bar →

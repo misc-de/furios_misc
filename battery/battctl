@@ -2037,7 +2037,7 @@ def cmd_daemon(_argv):
     # was up. It stops the next tick from claiming the place again.
     yielded = False
     # Whether a lock screen is over us. Asked once at startup and kept up to
-    # date by the signal - a daemon restarted while the phone is locked would
+    # date by logind - a daemon restarted while the phone is locked would
     # otherwise empty a percentage that is the only thing on the lock screen.
     locked = False
     try:
@@ -2102,7 +2102,20 @@ def cmd_daemon(_argv):
 
     loop_ = GLib.MainLoop()
     proxy = None
-    screensaver = None
+    lockwatch = None
+
+    def lock_state():
+        """Whether a lock screen is over us, as logind has it.
+
+        Free to ask: GDBusProxy keeps the property in step with logind's
+        PropertiesChanged, so this is a local read and no bus traffic. That
+        is why draw_time asks on every tick instead of trusting a signal it
+        may have missed.
+        """
+        if lockwatch is None:
+            return locked
+        value = lockwatch.get_cached_property("LockedHint")
+        return locked if value is None else value.get_boolean()
 
     def draw_time():
         """The strip follows the setting, in both directions.
@@ -2113,7 +2126,8 @@ def cmd_daemon(_argv):
         boot. Taken down the same way, and the percentage comes back with
         it - the strip and the gap it fills are one decision.
         """
-        nonlocal strip, yielded
+        nonlocal strip, yielded, locked
+        locked = lock_state()
         # percentage_switched_off() only where the answer is used, so an
         # ordinary tick with no strip and no option costs no gsettings call.
         # The strip may be gone without us: a compositor that restarts takes
@@ -2186,7 +2200,7 @@ def cmd_daemon(_argv):
                       flush=True)
             strip.set(runtime_label(daemon.last_reading, daemon.runtime()))
 
-    def screensaver_changed(_proxy, _sender, signal, params):
+    def lock_changed(*_):
         """Locked or unlocked - and with it, who owns the percentage slot.
 
         Locked, the strip cannot be seen at all: phoc has no session-lock
@@ -2206,22 +2220,19 @@ def cmd_daemon(_argv):
         did before this option existed.
 
         Why not the other way round, putting the strip back on top of the
-        lock screen: the moment to do that is when the screen comes ON while
-        locked, and there is no dependable signal for it. Rebuilding on the
-        lock itself was measured and leaves no strip at all - locking turns
-        the panel off in the same breath, and a layer surface created against
-        an output that is off is never configured. PowerSaveMode looked like
-        the answer and is not: it was emitted on one lock and not on the
-        next.
+        lock screen: rebuilding on the lock itself was measured and leaves no
+        strip at all - locking turns the panel off in the same breath, and a
+        layer surface created against an output that is off is never
+        configured. The moment to do it is when the screen comes ON while
+        locked. A strip built then DOES sit above the lock screen, measured
+        on 16.9.2026 with a throw-away one - what was missing was a signal
+        for that moment, and PowerSaveMode was not it: emitted on one lock
+        and not on the next. LockedHint, below, would be.
 
-        Nothing is decided here beyond the fact itself. draw_time acts on it,
-        so an ordinary tick puts things right as well - this signal is how it
-        happens at once, not the only way it can happen.
+        Nothing is decided here beyond the fact itself. draw_time reads the
+        state itself, so an ordinary tick puts things right as well - this
+        signal is how it happens at once, not the only way it can happen.
         """
-        nonlocal locked
-        if signal != "ActiveChanged":
-            return
-        locked = params.get_child_value(0).get_boolean()
         draw_time()
 
     def wake_up(*_):
@@ -2282,26 +2293,51 @@ def cmd_daemon(_argv):
               % error.message, file=sys.stderr, flush=True)
         proxy = None
 
-    # phosh's screensaver interface, for one thing: while the phone is
-    # locked the strip cannot be seen, so the percentage has to be given back
-    # for that time. Kept in a name of its own for the reason the UPower
-    # proxy is - a subscription whose proxy is collected expires in silence,
-    # with no error and no log line.
+    # Whether a lock screen is over us: logind's LockedHint on the graphical
+    # session, because while the phone is locked the strip cannot be seen and
+    # the percentage has to be given back for that time.
+    #
+    # NOT org.gnome.ScreenSaver, which this was built on and which answers a
+    # different question. Measured on 16.9.2026 with the lock screen on the
+    # display: `GetActive` said FALSE. phosh's own source says why - in
+    # screen-saver-manager.c `active` follows the screen going blank, and the
+    # screen is lit again the moment the phone is picked up, long before
+    # anybody unlocks it. So the percentage stayed emptied on a lock screen
+    # the strip cannot reach, and the bar showed a battery icon with nothing
+    # beside it: exactly what lifting the blanking is for. What phosh does
+    # publish on locking is logind's LockedHint (same file,
+    # on_lockscreen_manager_locked_changed).
+    #
+    # The session is the DISPLAY session of this user, asked for by name
+    # (`user/self` -> `Display`). Not the session this daemon runs in: that
+    # is the systemd --user manager, class `manager`, whose LockedHint never
+    # moves - reading that one is what hid this at first.
+    #
+    # Kept in a name of its own for the reason the UPower proxy is - a
+    # subscription whose proxy is collected expires in silence, with no error
+    # and no log line.
     try:
-        sitzung = Gio.bus_get_sync(Gio.BusType.SESSION, None)
-        screensaver = Gio.DBusProxy.new_sync(
-            sitzung, Gio.DBusProxyFlags.DO_NOT_AUTO_START, None,
-            "org.gnome.ScreenSaver", "/org/gnome/ScreenSaver",
-            "org.gnome.ScreenSaver", None)
-        screensaver.connect("g-signal", screensaver_changed)
-        antwort = screensaver.call_sync(
-            "GetActive", None, Gio.DBusCallFlags.NONE, 2000, None)
-        locked = bool(antwort.get_child_value(0).get_boolean())
+        system = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        flags = (Gio.DBusProxyFlags.DO_NOT_AUTO_START |
+                 Gio.DBusProxyFlags.GET_INVALIDATED_PROPERTIES)
+        user = Gio.DBusProxy.new_sync(
+            system, flags, None, "org.freedesktop.login1",
+            "/org/freedesktop/login1/user/self",
+            "org.freedesktop.login1.User", None)
+        display = user.get_cached_property("Display")
+        if display is None:
+            raise GLib.Error("this user has no graphical session")
+        lockwatch = Gio.DBusProxy.new_sync(
+            system, flags, None, "org.freedesktop.login1",
+            display.get_child_value(1).get_string(),
+            "org.freedesktop.login1.Session", None)
+        lockwatch.connect("g-properties-changed", lock_changed)
+        locked = lock_state()
     except GLib.Error as error:
-        print("no screensaver to listen to (%s) - the lock screen will show "
+        print("no logind session to watch (%s) - the lock screen will show "
               "no percentage while the time is on" % error.message,
               file=sys.stderr, flush=True)
-        screensaver = None
+        lockwatch = None
 
     # The config file, so a switch thrown in the app is on screen at once.
     # Without this the only clocks are UPower's signal and the slow timer
@@ -2356,7 +2392,7 @@ def cmd_daemon(_argv):
     wake_up()
     loop_.run()
     # Referenced after the loop so nothing can decide the proxies were unused.
-    del proxy, screensaver
+    del proxy, lockwatch
     return 0
 
 
