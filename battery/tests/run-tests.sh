@@ -26,7 +26,9 @@ run "the restart policy of the unit" bash "$HERE/test-restart-policy.sh"
 printf '\n\033[1m== shell\033[0m\n'
 if command -v shellcheck >/dev/null; then
     for f in "$ROOT"/*.sh "$HERE"/*.sh; do
-        if shellcheck -x "$f"; then
+        # -P, because -x alone follows `. "$HERE/lib.sh"` relative to the
+        # working directory and reports it as unreadable (SC1091).
+        if shellcheck -x -P "$HERE" "$f"; then
             printf '  \033[32mok\033[0m   %s\n' "${f#"$ROOT"/}"
         else
             FAILED=$((FAILED + 1))

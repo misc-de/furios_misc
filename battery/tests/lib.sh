@@ -1,5 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 misc-de
 # SPDX-License-Identifier: MIT
+# shellcheck shell=bash
+#
+# Sourced, never run, so it has no shebang - and without one shellcheck does
+# not know which shell it is reading (SC2148). Found by the CI runner on
+# 16.9.2026; this phone has no shellcheck, so the suite had been skipping the
+# whole check for as long as it has existed.
 # A test harness small enough to read in one sitting.
 #
 # No framework on purpose: this has to run on the phone itself, where every
