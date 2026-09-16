@@ -81,6 +81,11 @@ class Base(unittest.TestCase):
         # No icon name unless a test says one: otherwise every run would
         # depend on what this phone's UPower is saying at the time.
         os.environ["FURIOS_BATTERY_ICON"] = ""
+        # And no estimate from UPower either, for the same reason and with
+        # more at stake: unset, describe() opens the system bus and asks the
+        # real battery, so a test of the time in the bar would pass or fail
+        # by whether a cable happened to be in.
+        os.environ["FURIOS_BATTERY_UPOWER_TIME"] = "0,0"
 
     def cfg_on(self, **rest):
         """A config with the colours switched on.
@@ -103,6 +108,7 @@ class Base(unittest.TestCase):
         os.environ.pop("FURIOS_BATTERY_ICON_SETTING_FILE", None)
         os.environ.pop("FURIOS_BATTERY_SETTING_FILE", None)
         os.environ.pop("FURIOS_BATTERY_ICON", None)
+        os.environ.pop("FURIOS_BATTERY_UPOWER_TIME", None)
         os.environ["PATH"] = self.alter_pfad
         for folder, _, files in os.walk(self.tmp, topdown=False):
             for file_ in files:
@@ -1632,6 +1638,61 @@ class TheTimeInTheLoop(Base):
         b.save_config(self.cfg_on(runtime=True))
         self.d = b.Daemon(current="base")
 
+    def test_upower_is_preferred_to_our_own_arithmetic(self):
+        """The whole point of asking it: measured on 16.9.2026 with a socket
+        dropping out, UPower said 3:03 and the charge over the current of
+        that instant said 51:36. UPower has this battery's history and the
+        daemon has five minutes of it."""
+        self.battery(status="Charging", ampere=0.065, avg=65000,
+                     charge=self.HAVE, full=self.FULL)
+        b.save_config(self.cfg_on(runtime=True, charge_time=True))
+        self.d = b.Daemon(current="base")
+        self.d.tick(now=1000)
+        # Ours, on its own, is 35 hours - over the ceiling, so it says
+        # nothing at all and the bar keeps the percentage.
+        self.assertIsNone(self.d.runtime())
+        self.d.time_to_full = 10999
+        self.d.tick(now=1010)
+        self.assertEqual(self.d.runtime(), "03:03")
+
+    def test_upower_is_smoothed_like_everything_else(self):
+        """Its own estimate swings by a fifth between two readings two
+        seconds apart - measured on 16.9.2026 on a steady discharge. The
+        median of the window is what goes in the bar."""
+        self.battery(status="Discharging", ampere=0.3, avg=300000,
+                     charge=self.HAVE, full=self.FULL)
+        for when, sekunden in ((1000, 40072), (1010, 31604), (1020, 36633),
+                               (1030, 30221), (1040, 38061)):
+            self.d.time_to_empty = sekunden
+            self.d.tick(now=when)
+        self.assertEqual(self.d.runtime(), "10:11")     # the median, 36633 s
+
+    def test_a_direction_change_does_not_average_the_two(self):
+        """The estimates of the other direction are as wrong here as the
+        currents are - a charge time has nothing to say about a runtime."""
+        self.d.time_to_full = 3600
+        self.battery(status="Charging", ampere=1.5, avg=1500000,
+                     charge=self.HAVE, full=self.FULL)
+        b.save_config(self.cfg_on(runtime=True, charge_time=True))
+        self.d = b.Daemon(current="base")
+        self.d.time_to_full = 3600
+        self.d.tick(now=1000)
+        self.assertEqual(self.d.runtime(), "01:00")
+        self.d.time_to_full, self.d.time_to_empty = 0, 36000
+        self.battery(status="Discharging", ampere=0.3, avg=300000,
+                     charge=self.HAVE, full=self.FULL)
+        self.d.tick(now=1010)
+        self.assertEqual(self.d.runtime(), "10:00")
+
+    def test_where_upower_has_no_answer_ours_still_does(self):
+        """Its estimate is 0 for the first minutes after a start, and a bar
+        that shows nothing until then looks broken."""
+        self.battery(status="Discharging", ampere=0.6034, avg=378200,
+                     charge=self.HAVE, full=self.FULL)
+        self.d.time_to_empty = 0
+        self.d.tick(now=1000)
+        self.assertEqual(self.d.runtime(), "05:33")
+
     def test_the_gauge_average_is_preferred_to_the_instant(self):
         """Measured within one second on 16.9.2026: current_now 0.603 A,
         current_avg 0.378 A, same steady discharge - 03:29 against 05:33.
@@ -2021,6 +2082,67 @@ class WhoWinsOverThePercentage(Base):
         does nothing for the rest of the session."""
         self.assertEqual(b.strip_action(False, False, False, True), "reset")
         self.assertEqual(b.strip_action(True, False, False, False), "up")
+
+
+class UPowerTime(unittest.TestCase):
+    """UPower's own estimate, which the bar prefers to our arithmetic.
+
+    It knows this battery's history; we keep five minutes of it. Measured on
+    16.9.2026 against a socket that was dropping out: UPower said 3:03 while
+    the same instant of current_now said 51:36.
+    """
+
+    def test_charging_takes_the_time_to_full(self):
+        self.assertAlmostEqual(b.upower_hours(10999, 0, True), 3.055, places=2)
+
+    def test_on_battery_it_takes_the_time_to_empty(self):
+        self.assertAlmostEqual(b.upower_hours(0, 18720, False), 5.2, places=2)
+
+    def test_it_never_reads_the_other_direction(self):
+        """UPower publishes both, and the one we are not going is stale or
+        zero. Taking it would answer a question nobody asked."""
+        self.assertIsNone(b.upower_hours(10999, 0, False))
+        self.assertIsNone(b.upower_hours(0, 18720, True))
+
+    def test_zero_is_upower_saying_it_does_not_know(self):
+        """Which is what it says for the first minutes after a start - and
+        then our own arithmetic answers instead."""
+        self.assertIsNone(b.upower_hours(0, 0, True))
+        self.assertIsNone(b.upower_hours(0, 0, False))
+
+    def test_a_day_is_not_a_charge_time(self):
+        """0.065 A into a 4.37 Ah battery is 33 hours, measured on
+        16.9.2026 - that is a cable out of a broken socket, not a time. The
+        bar falls back to the percentage."""
+        self.assertIsNone(b.upower_hours(33 * 3600, 0, True))
+        self.assertIsNotNone(b.upower_hours(23 * 3600, 0, True))
+
+    def test_a_negative_time_is_no_time(self):
+        self.assertIsNone(b.upower_hours(-5, 0, True))
+
+    def test_the_seam_is_read_the_way_upower_publishes_it(self):
+        os.environ["FURIOS_BATTERY_UPOWER_TIME"] = "10999,0"
+        try:
+            self.assertEqual(b.upower_seconds(), (10999, 0))
+        finally:
+            os.environ["FURIOS_BATTERY_UPOWER_TIME"] = "0,0"
+
+    def test_a_broken_seam_is_no_answer_rather_than_a_crash(self):
+        os.environ["FURIOS_BATTERY_UPOWER_TIME"] = "nonsense"
+        try:
+            self.assertEqual(b.upower_seconds(), (0, 0))
+        finally:
+            os.environ["FURIOS_BATTERY_UPOWER_TIME"] = "0,0"
+
+    def test_a_proxy_without_the_property_is_zero(self):
+        """An older UPower, or a device object that does not carry it. The
+        daemon must not die of a battery it cannot ask."""
+        class NoProperty:
+            def get_cached_property(self, _name):
+                return None
+
+        self.assertEqual(b.cached_int(NoProperty(), "TimeToFull"), 0)
+        self.assertEqual(b.cached_int(None, "TimeToFull"), 0)
 
 
 class ConfigWatch(unittest.TestCase):

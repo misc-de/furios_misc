@@ -608,9 +608,85 @@ def merge_colours(power, level):
 # microamps would produce a thousandfold number and a permanently green icon.
 # Better to say nothing than to say something wrong.
 MAX_PLAUSIBLE_W = 60.0
-# The same idea for a time. Above this it is not a runtime any more, it is a
-# current of almost nothing divided into a full battery.
-MAX_PLAUSIBLE_H = 99.0
+# The same idea for a time, and it is deliberately tight. This battery holds
+# 4.37 Ah; the weakest source that is still charging is a 500 mA port, which
+# is a full charge in nine hours, and a phone that never suspends empties a
+# full battery in about eleven. So anything beyond a day is not a time to
+# full or a time to empty - it is a cable that has fallen out of a broken
+# socket, measured on 16.9.2026 at 0.065 A and "33 hours". The bar says the
+# percentage instead, which is the one thing that is still true.
+MAX_PLAUSIBLE_H = 24.0
+
+
+def upower_hours(time_to_full, time_to_empty, charging):
+    """UPower's own estimate for the direction we are going, in hours.
+
+    Preferred over our arithmetic, because UPower keeps a history of this
+    battery and we keep five minutes of it. Measured on 16.9.2026 against a
+    socket that was dropping out: UPower said 3:03 while the same instant of
+    current_now, divided into the missing charge, said 51:36.
+
+    It is free: the daemon is subscribed to this device for its clock
+    already, so both numbers arrive cached with the signal that wakes us.
+
+    Zero is UPower's way of saying it does not know - at startup, and for
+    whichever direction the battery is not going. Then, and only then, the
+    arithmetic below answers instead.
+    """
+    seconds = time_to_full if charging else time_to_empty
+    if not seconds or seconds <= 0:
+        return None
+    hours = seconds / 3600.0
+    return hours if 0 < hours <= MAX_PLAUSIBLE_H else None
+
+
+def cached_int(proxy, name):
+    """One of UPower's cached int64 properties, or 0.
+
+    Cached: no call and no round trip, because the value came along with the
+    signal that woke the daemon. Zero for anything unexpected - 0 is already
+    UPower's own word for "no answer", so there is nothing to invent.
+    """
+    try:
+        value = proxy.get_cached_property(name)
+        return value.get_int64() if value else 0
+    except (AttributeError, TypeError):
+        return 0
+
+
+def upower_seconds():
+    """UPower's two estimates - (time to full, time to empty), in seconds.
+
+    For the front ends. The daemon has a proxy of its own and reads the same
+    two properties off it; this is the one-shot version, so that `battctl
+    status` says what the bar says. The two disagreeing about the same
+    battery is exactly the kind of trap this project keeps walking into.
+
+    Over D-Bus rather than out of `upower -i`, which prints them humanised
+    ("5.2 hours", "94.4 minutes") and would have to be parsed back into
+    seconds - in whatever unit it picks next time.
+
+    (0, 0) for everything that can go wrong: no bus, no UPower, no gi.
+    """
+    forced = os.environ.get("FURIOS_BATTERY_UPOWER_TIME")
+    if forced is not None:
+        try:
+            voll, leer = (int(x) for x in forced.split(","))
+            return voll, leer
+        except ValueError:
+            return 0, 0
+    try:
+        import gi
+        gi.require_version("Gio", "2.0")
+        from gi.repository import Gio
+        bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        proxy = Gio.DBusProxy.new_sync(
+            bus, Gio.DBusProxyFlags.DO_NOT_AUTO_START, None,
+            "org.freedesktop.UPower", UPOWER_DEV,
+            "org.freedesktop.UPower.Device", None)
+    except Exception:                               # noqa: BLE001
+        return 0, 0
+    return cached_int(proxy, "TimeToFull"), cached_int(proxy, "TimeToEmpty")
 
 
 def runtime_hours(reading, ampere=None):
@@ -1312,12 +1388,17 @@ def describe(cfg=None, setting=None, base=None):
         "ampere": round((reading or {}).get("ampere", 0.0), 3),
         "volt": round((reading or {}).get("volt", 0.0), 3),
         "percent": (reading or {}).get("percent"),
-        # The time from THIS reading alone, and only if the switch for this
-        # direction is on - this is what the bar would say, not what could
-        # be worked out. A single read of current_now is half an hour out
-        # either way, which is fine for a status line somebody asked for and
-        # not fine for a number standing in the bar all day.
-        "runtime": (format_runtime(runtime_hours(reading))
+        # The same two sources in the same order as the bar: UPower's
+        # estimate, and our own arithmetic only where UPower has no answer.
+        # Not the same smoothing, though - this is ONE reading, while the bar
+        # shows the median of five minutes of them, so the two differ by
+        # however much the battery is swinging. Asking sysfs alone would be
+        # worse: a status line that disagrees with the bar it is meant to
+        # explain, and by hours rather than by minutes.
+        "runtime": (format_runtime(upower_hours(*upower_seconds(),
+                                                 charging=(reading or {})
+                                                 .get("charging"))
+                                   or runtime_hours(reading))
                     if time_wanted(reading, cfg) else None),
         "readable": reading is not None,
         "plausible": (reading or {}).get("plausible", False),
@@ -1495,6 +1576,12 @@ class Daemon:
         # is a charge divided by a current, and the voltage in between would
         # only add its own noise.
         self.runtime_samples = []         # (when, amperes, charging)
+        # UPower's estimate gets the same window, because it needs it just as
+        # much: measured on 16.9.2026 on a steady discharge, six readings two
+        # seconds apart said 11:08, 08:47, 10:11, 08:24, 10:34, 09:33. It has
+        # the better history and it is still not a number to put in a bar
+        # unsmoothed.
+        self.upower_samples = []          # (when, hours, charging)
         # The last usable reading, kept for whoever draws the time. The tick
         # already has it; asking /sys a second time would be a second answer
         # to the same question.
@@ -1520,6 +1607,11 @@ class Daemon:
         # different question, and phosh_icon() answers it - phosh builds
         # its own name and the two are not the same.
         self.icon = None
+        # UPower's own two estimates, in seconds, kept up to date by whoever
+        # drives the loop - 0 where it has no answer. Read from the same
+        # cached properties as the icon, so they cost no call of their own.
+        self.time_to_full = 0
+        self.time_to_empty = 0
         self.base = base_name(current if current is not None else self.setting.get())
 
     @staticmethod
@@ -1582,6 +1674,12 @@ class Daemon:
         grenze = now - self.cfg["runtime_window_s"]
         self.runtime_samples = [s for s in self.runtime_samples
                                 if s[0] >= grenze]
+        stunden = upower_hours(self.time_to_full, self.time_to_empty,
+                               reading["charging"])
+        if stunden is not None:
+            self.upower_samples.append((now, stunden, reading["charging"]))
+        self.upower_samples = [s for s in self.upower_samples
+                               if s[0] >= grenze]
         return reading
 
     def decide(self, reading, now=None):
@@ -1606,29 +1704,44 @@ class Daemon:
         return wanted_bucket(smoothed, self.cfg, self.showing[0], self.icon)
 
     def runtime(self, reading=None):
-        """The time to show, smoothed the way the colour is - or None.
+        """The time to show - UPower's estimate, or ours, or none at all.
 
-        Only the samples going the same way as the reading count. A cable
+        UPower first, because it has this battery's history and we have five
+        minutes of it. It is also already on the line: the daemon rides its
+        signal for a clock, so the estimate arrives cached with the wake-up
+        and costs nothing to read. Through the same window as everything
+        else, though - its estimate swings by a fifth between two readings
+        two seconds apart, measured, and a bar is not the place for that.
+
+        Ours is the fallback, for the minutes after a start when UPower
+        answers 0 - charge over current, median of the same-direction samples
+        in the window. Only the samples going the same way count: a cable
         pulled halfway through the window would otherwise average a charge
         current into a discharge and produce a time that was never true of
         either direction.
-
-        None when the switch for this direction is off - and then the strip
-        shows the percentage, which is what it falls back to.
 
         Why smoothing at all: measured on 16.9.2026 in one second,
         current_now gave 0.603 A and current_avg 0.378 A on the same steady
         discharge - 03:29 against 05:33 for the same battery. The number
         replaces a percentage that moves once a minute, so it has to be at
         least that calm.
+
+        None when the switch for this direction is off, and none when neither
+        source can say - and then the strip shows the percentage, which is
+        what it falls back to.
         """
         reading = self.last_reading if reading is None else reading
         if not time_wanted(reading, self.cfg):
             return None
-        gleich = [a for (_, a, c) in self.runtime_samples
-                  if c == reading["charging"]]
-        mitte = median(gleich) if gleich else reading.get("ampere")
-        return format_runtime(runtime_hours(reading, mitte))
+        gemeldet = [h for (_, h, c) in self.upower_samples
+                    if c == reading["charging"]]
+        hours = median(gemeldet) if gemeldet else None
+        if hours is None:
+            gleich = [a for (_, a, c) in self.runtime_samples
+                      if c == reading["charging"]]
+            mitte = median(gleich) if gleich else reading.get("ampere")
+            hours = runtime_hours(reading, mitte)
+        return format_runtime(hours)
 
     def apply(self, pair, now=None, kind=None):
         """Set the theme for (power colour, filling colour).
@@ -2109,6 +2222,8 @@ def cmd_daemon(_argv):
                 # the signal that woke us.
                 name = proxy.get_cached_property("IconName")
                 daemon.icon = name.get_string() if name else None
+                daemon.time_to_full = cached_int(proxy, "TimeToFull")
+                daemon.time_to_empty = cached_int(proxy, "TimeToEmpty")
             geaendert = daemon.tick()
             # After the tick, so it draws this reading and not the one
             # before it; outside the `if`, because the time moves on every

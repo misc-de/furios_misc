@@ -278,6 +278,15 @@ The clock is **UPower**: it polls the battery for the whole phone anyway, so
 its signal is subscribed to rather than polling ourselves. A slow timer
 (120 s) runs underneath as a net.
 
+The time itself comes from **UPower too**, not from our own arithmetic: it
+publishes `TimeToFull` and `TimeToEmpty` for this battery and keeps a history
+we do not have. Measured while the socket was dropping out, UPower said 3:03
+where charge-over-current said 51:36. It goes through the same five-minute
+median all the same — its own estimate swung between 8:24 and 11:08 on a
+steady discharge — and our arithmetic stays as the fallback for the minutes
+after a start, when UPower answers 0. Above 24 hours neither is a time any
+more, and the bar shows the percentage (FINDINGS.md §12).
+
 The config file has a watch of its own, because those two clocks are too slow
 for a switch: `runtime on` took up to two minutes to reach the bar when the
 only thing that read the config was the next battery reading. It is 0.13 s
@@ -300,7 +309,7 @@ tests/run-tests.sh      # no display, no battery, no root - NEVER with sudo
 tests/coverage.sh
 ```
 
-221 tests, 78 % of the lines. What is missing is the D-Bus wiring of the
+234 tests, 78 % of the lines. What is missing is the D-Bus wiring of the
 daemon and the strip itself — both are proven on the device with `grim` and
-`WAYLAND_DEBUG`, not simulated (FINDINGS.md §8, §12). The decision behind the
+`WAYLAND_DEBUG`, not simulated (FINDINGS.md §8, §13). The decision behind the
 strip is lifted out of the loop so it can be tested: `strip_action`.

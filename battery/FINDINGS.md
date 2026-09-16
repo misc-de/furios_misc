@@ -401,7 +401,49 @@ The trap is in the same directory: `state.json` is written by the daemon on
 stamp; the loop it prevents is what its tests are about. The daemon still
 costs 1 CPU tick in 20 s afterwards, so the monitor is free.
 
-## 12 · What is still not checked
+## 12 · UPower already knows, and it still needs the window
+
+The time was ours to work out: missing charge over current. UPower keeps a
+history of this battery and publishes `TimeToFull` and `TimeToEmpty` on the
+device object the daemon is **already subscribed to** for its clock - so both
+numbers arrive cached with the wake-up and cost nothing to read.
+
+The gap between the two, measured on 16.9.2026 while the socket was dropping
+out:
+
+```
+UPower      3:03
+ours       51:36     (charge over current_now, same instant)
+```
+
+But UPower's estimate is not calm either. Six reads, two seconds apart, on a
+steady discharge:
+
+```
+11:08  08:47  10:11  08:24  10:34  09:33
+```
+
+So it goes through the same five-minute median as everything else. What that
+buys, measured with a shadow daemon on the phone while the cable flickered:
+
+```
+          UPower raw   bar
+20:25:22     01:20     01:20
+20:25:32       -       01:20     UPower had no answer; the window carried it
+20:25:42     01:35     01:27     the median of the two
+20:25:52       -       01:27
+```
+
+Ours stays as the fallback, for the minutes after a start when UPower answers
+0 and for a phone whose UPower is not running.
+
+**And the ceiling came down from 99 h to 24.** This battery holds 4.37 Ah:
+nine hours from the weakest port that is still a charger, about eleven to
+empty on a phone that never suspends. Anything past a day is not a time, it
+is a cable out of a broken socket - measured at 0.065 A and "33 hours". The
+bar shows the percentage instead, which is the one thing still true.
+
+## 13 · What is still not checked
 
 Beside the D-Bus wiring (§8): the strip itself. Whether a layer surface comes
 up, where its ink lands and whether it takes touch are all questions for a
