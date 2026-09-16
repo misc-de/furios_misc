@@ -1721,7 +1721,15 @@ class TheTimeInTheLoop(Base):
     def test_a_direction_change_does_not_average_across_it(self):
         """A cable pulled halfway through the window would otherwise mix a
         charge current into a discharge and produce a time that was never
-        true of either."""
+        true of either.
+
+        And the first reading of the new direction does not speak yet: on
+        this phone the socket drops out for a single reading several times an
+        hour, and one such reading put 02:33 into a bar that said 01:27
+        before and after it (measured 16.9.2026). The percentage stands there
+        until a second reading agrees - then the number is the discharge, not
+        an average of the two.
+        """
         for when in (1000, 1010, 1020):
             self.battery(status="Charging", ampere=2.0,
                          charge=self.HAVE, full=self.FULL)
@@ -1729,6 +1737,17 @@ class TheTimeInTheLoop(Base):
         self.battery(status="Discharging", ampere=0.3782,
                      charge=self.HAVE, full=self.FULL)
         self.d.tick(now=1030)
+        self.assertIsNone(self.d.runtime())
+        self.d.tick(now=1040)
+        self.assertEqual(self.d.runtime(), "05:33")
+
+    def test_one_reading_is_still_enough_at_a_start(self):
+        """Nothing has contradicted it there, and a bar that shows the
+        percentage for the first half minute of every boot would look like
+        the option had not been switched on."""
+        self.battery(status="Discharging", ampere=0.3782,
+                     charge=self.HAVE, full=self.FULL)
+        self.d.tick(now=1000)
         self.assertEqual(self.d.runtime(), "05:33")
 
     def test_an_old_sample_falls_out_of_the_window(self):

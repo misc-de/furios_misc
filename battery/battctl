@@ -1739,8 +1739,17 @@ class Daemon:
         if hours is None:
             gleich = [a for (_, a, c) in self.runtime_samples
                       if c == reading["charging"]]
-            mitte = median(gleich) if gleich else reading.get("ampere")
-            hours = runtime_hours(reading, mitte)
+            # One reading is enough to start from, but not to turn on.
+            # Measured on 16.9.2026: a single stray Discharging reading
+            # between two charging ones put 02:33 into a bar that said 01:27
+            # before and after it - on this phone the socket does that by
+            # itself, several times an hour. So a lone sample counts while
+            # nothing has contradicted it, and stops counting the moment the
+            # window also holds the other direction. At a start, where there
+            # is one sample and nothing else at all, the bar still speaks.
+            if len(gleich) < 2 and len(gleich) < len(self.runtime_samples):
+                return None
+            hours = runtime_hours(reading, median(gleich))
         return format_runtime(hours)
 
     def apply(self, pair, now=None, kind=None):

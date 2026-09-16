@@ -309,7 +309,7 @@ tests/run-tests.sh      # no display, no battery, no root - NEVER with sudo
 tests/coverage.sh
 ```
 
-234 tests, 78 % of the lines. What is missing is the D-Bus wiring of the
+235 tests, 78 % of the lines. What is missing is the D-Bus wiring of the
 daemon and the strip itself — both are proven on the device with `grim` and
 `WAYLAND_DEBUG`, not simulated (FINDINGS.md §8, §13). The decision behind the
 strip is lifted out of the loop so it can be tested: `strip_action`.
