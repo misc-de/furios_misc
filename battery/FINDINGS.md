@@ -379,7 +379,29 @@ daemon that never suspends is measured before it is believed, and the
 cheapest way to measure it is the `cutime`/`cstime` fields of
 `/proc/<pid>/stat`, which separate a process's own cost from what it forks.
 
-## 11 · What is still not checked
+## 11 · A switch is only as fast as the daemon's slowest clock
+
+Switching "time left" on took **up to two minutes** to reach the bar. The
+config was written at once and read only in `tick()`, and `tick()` has two
+clocks: UPower's `PropertiesChanged` and a 120 s fallback timer. Nothing
+about the switch itself was slow — nobody was listening for it.
+
+A `GFileMonitor` on the config's **directory** (renamed into place, so the
+inode changes with every write) now wakes the same tick. Measured on the
+device on 16.9.2026, from the write to the daemon's own log line:
+
+```
+runtime off   0.145 s
+runtime on    0.134 s
+```
+
+The trap is in the same directory: `state.json` is written by the daemon on
+**every** tick, so an unguarded monitor is a loop — write, wake, tick, write.
+`is_config_write` is the guard, and it has two halves, the name and a changed
+stamp; the loop it prevents is what its tests are about. The daemon still
+costs 1 CPU tick in 20 s afterwards, so the monitor is free.
+
+## 12 · What is still not checked
 
 Beside the D-Bus wiring (§8): the strip itself. Whether a layer surface comes
 up, where its ink lands and whether it takes touch are all questions for a

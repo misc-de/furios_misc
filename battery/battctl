@@ -726,6 +726,22 @@ def save_config(cfg, path=None):
     os.replace(tmp, target)
 
 
+def is_config_write(name, stamp, known):
+    """Did this file event change the config, and is it the config at all?
+
+    Two guards, because the daemon watches the DIRECTORY the config lives in
+    and writes state.json into that same directory on every tick. Reacting to
+    its own writes would be a loop with no end to it: write, wake, tick,
+    write. So the name has to be the config's, and something in the file has
+    to have actually moved - a rename onto an identical file is not a switch
+    somebody threw.
+
+    Its own function because the alternative lives in the main loop, where a
+    compositor and a bus stand between a test and the decision.
+    """
+    return name == os.path.basename(CONFIG) and stamp != known
+
+
 # ------------------------------------------------------------------- Messung
 
 def _uah(name, base=None):
@@ -2162,6 +2178,39 @@ def cmd_daemon(_argv):
               "no percentage while the time is on" % error.message,
               file=sys.stderr, flush=True)
         screensaver = None
+
+    # The config file, so a switch thrown in the app is on screen at once.
+    # Without this the only clocks are UPower's signal and the slow timer
+    # below, and switching "time left" on took up to two minutes to show -
+    # long enough that the switch looks broken and gets thrown again.
+    #
+    # The DIRECTORY, not the file: save_config writes beside the target and
+    # renames, so the inode changes with every write and a monitor on the
+    # file itself would follow the old one into nowhere.
+    def config_written(_monitor, geaendert, _other, _event):
+        try:
+            if not is_config_write(geaendert.get_basename(),
+                                   daemon._stamp(), daemon.cfg_stamp):
+                return
+            wake_up()
+        except Exception as error:                  # noqa: BLE001
+            print("config watch failed: %r" % (error,), file=sys.stderr,
+                  flush=True)
+
+    # Kept in a name, for the reason the two proxies above are: a monitor
+    # nobody holds is collected, and what is left is a daemon that looks
+    # healthy and never notices a thing.
+    try:
+        os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
+        ordner = Gio.File.new_for_path(os.path.dirname(CONFIG))
+        config_monitor = ordner.monitor_directory(Gio.FileMonitorFlags.NONE,
+                                                  None)
+        config_monitor.connect("changed", config_written)
+    except (GLib.Error, OSError) as error:
+        print("cannot watch the config (%s) - a switch takes effect on the "
+              "next reading instead of at once" % error, file=sys.stderr,
+              flush=True)
+        config_monitor = None
 
     # The safety net, and the whole answer when there is no UPower: a slow
     # timer. It also covers the case the comment above warns about - if the

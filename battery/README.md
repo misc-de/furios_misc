@@ -216,16 +216,17 @@ this phone that reaches into the running shell:
 
 ```css
 phosh-battery-info label { color: transparent; font-size: 1px;
-                           min-width: 29px; }
+                           min-width: 41px; }
 ```
 
 Each declaration does a different job. `color` takes the text away and leaves
 the widget. `font-size` stops the percentage's own text from deciding how
 wide the slot is, so 9 %, 48 % and 100 % all reserve the same room — without
 it the icons shift under the clock as the battery empties. `min-width` is
-then the width, and 29 sets it to the 43 screen px that `48 %` occupied,
-found by stepping the value and reading the icon positions out of a
-screenshot (28 → 579/615, 30 → 576/612, wanted 577/613).
+then the width, and it has to hold OUR text rather than the percentage's: at
+41 the slot fits `04:38` at 16 px with a 15 px gap to the battery icon. Found
+by stepping the value and reading the icon positions out of a screenshot — at
+29, which was right for 13 px text, the clock touched the icon.
 
 The clock itself is a **layer-shell strip** over the top bar, the way
 `killswitch-indicator` draws its icons. Weight and figures are phosh's own
@@ -277,6 +278,11 @@ The clock is **UPower**: it polls the battery for the whole phone anyway, so
 its signal is subscribed to rather than polling ourselves. A slow timer
 (120 s) runs underneath as a net.
 
+The config file has a watch of its own, because those two clocks are too slow
+for a switch: `runtime on` took up to two minutes to reach the bar when the
+only thing that read the config was the next battery reading. It is 0.13 s
+now, measured on the device (FINDINGS.md §11).
+
 **What it costs**, measured on the device with `/proc/<pid>/stat` over two
 minutes, twice, with the time in the bar switched on: **0.03 % of one core,
 about 26 s of CPU a day, and no child processes at all.** It was 0.217 % and
@@ -294,7 +300,7 @@ tests/run-tests.sh      # no display, no battery, no root - NEVER with sudo
 tests/coverage.sh
 ```
 
-216 tests, 78 % of the lines. What is missing is the D-Bus wiring of the
+221 tests, 78 % of the lines. What is missing is the D-Bus wiring of the
 daemon and the strip itself — both are proven on the device with `grim` and
-`WAYLAND_DEBUG`, not simulated (FINDINGS.md §8, §11). The decision behind the
+`WAYLAND_DEBUG`, not simulated (FINDINGS.md §8, §12). The decision behind the
 strip is lifted out of the loop so it can be tested: `strip_action`.

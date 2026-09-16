@@ -2023,6 +2023,37 @@ class WhoWinsOverThePercentage(Base):
         self.assertEqual(b.strip_action(True, False, False, False), "up")
 
 
+class ConfigWatch(unittest.TestCase):
+    """Which file events in the config directory are worth a tick.
+
+    The daemon watches the directory, because the config is renamed into
+    place, and it writes state.json into that same directory every tick. So
+    the guard has to tell a switch from our own footprints.
+    """
+
+    def name(self):
+        return os.path.basename(b.CONFIG)
+
+    def test_a_changed_config_wakes_us(self):
+        self.assertTrue(b.is_config_write(self.name(), (2, 20), (1, 10)))
+
+    def test_our_own_state_file_does_not(self):
+        """The loop this prevents: write state, wake, tick, write state."""
+        self.assertFalse(b.is_config_write("state.json", (2, 20), (1, 10)))
+
+    def test_nor_does_the_temporary_file_it_is_renamed_from(self):
+        self.assertFalse(b.is_config_write(self.name() + ".new",
+                                           (2, 20), (1, 10)))
+
+    def test_a_config_rewritten_to_the_same_thing_is_not_a_switch(self):
+        self.assertFalse(b.is_config_write(self.name(), (1, 10), (1, 10)))
+
+    def test_a_config_that_has_just_appeared_wakes_us(self):
+        """Nothing there at startup reads as None, and the first write is
+        the first time anybody said anything."""
+        self.assertTrue(b.is_config_write(self.name(), (1, 10), None))
+
+
 if __name__ == "__main__":
     # Built by hand rather than through unittest.main(), which looks for tests
     # in sys.modules["__main__"] - and under the coverage tracer that is the
