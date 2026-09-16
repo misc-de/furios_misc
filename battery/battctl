@@ -62,8 +62,21 @@ THEME_DIRS = [
 ]
 
 SETTING = "org.gnome.desktop.interface gtk-theme"
+# The key that puts the percentage beside the battery icon. phosh honours it
+# live - measured on 16.9.2026: the number goes and comes back within a few
+# seconds, no shell restart. That is what makes "the time left instead of it"
+# possible at all, because the text itself cannot come from a theme: GTK CSS
+# can colour a node, it cannot write words into one.
+PERCENT_SETTING = "org.gnome.desktop.interface show-battery-percentage"
+# What that key was before we hid it. Its own small file rather than the
+# config: the app writes the config and the daemon would then be writing the
+# same file from the other side, and the one thing that must survive is the
+# answer to "what do we put back".
+STATE = os.environ.get(
+    "FURIOS_BATTERY_STATE",
+    os.path.join(os.path.dirname(CONFIG), "state.json"))
 
-COLORS = {"green": "#2ec27e", "amber": "#ff7800", "red": "#e01b24"}
+COLORS = {"green": "#2ec27e", "amber": "#e5a50a", "red": "#e01b24"}
 BUCKETS = ("green", "amber", "red")
 
 # The two halves of the icon, and they say two different things.
@@ -81,6 +94,30 @@ BUCKETS = ("green", "amber", "red")
 # a rule without `color` leaves the shell in the panel's own foreground, a
 # rule without the palette leaves the level in it. Naming a white would be
 # guessing at a foreground we cannot read.
+# phosh's percentage, made to hold its place without showing anything.
+#
+# Three declarations, and each is load-bearing:
+#   color        the text goes, the widget stays
+#   font-size    its own text no longer decides how wide it is, so 9 %, 48 %
+#                and 100 % all reserve the same room and the icons beside it
+#                cannot shift under our clock
+#   min-width    and this is how much room. It has to hold OUR text, not the
+#                percentage's: at 41 the slot fits "04:38" at 16 px with a
+#                15 px gap to the battery icon. Measured on the device on
+#                16.9.2026 by stepping the value and reading the icon
+#                positions out of a screenshot - at 29, which was right for
+#                13 px text, the clock touched the icon.
+#
+# Why at all: this is the only way to have the time where the percentage was.
+# Switching the percentage off with its gsettings key frees the space and
+# phosh immediately moves the battery icon into it - measured: the icon goes
+# from 613..631 to 666..683, and there is nothing to its right but phosh's
+# own 36 px of padding.
+RULE_PERCENT = ("phosh-battery-info label {\n"
+                "  color: transparent;\n"
+                "  font-size: 1px;\n"
+                "  min-width: 41px;\n"
+                "}\n")
 RULE_COLOR = "  color: %s;\n"
 RULE_PALETTE = "  -gtk-icon-palette: %s;\n"
 RULE = "phosh-battery-info image {\n%s}\n"
@@ -96,7 +133,7 @@ RULE = "phosh-battery-info image {\n%s}\n"
 KINDS = ("c", "d")
 
 
-def css_rule(power=None, level=None, kind="d", colors=None):
+def css_rule(power=None, level=None, kind="d", colors=None, percent=False):
     """The stylesheet for one combination, or "" when there is nothing to
     say.
 
@@ -104,8 +141,14 @@ def css_rule(power=None, level=None, kind="d", colors=None):
     the low-level icons that draw it that way) and, on a charging icon of
     ours, the bolt (warning). Absent declarations are how "no colour" is
     said - naming a white would be guessing at a foreground we cannot read.
+
+    `percent` adds the rule that empties phosh's percentage without freeing
+    its place. It is the one part of this stylesheet that is not a colour,
+    and it is here because a theme is the only thing on this phone that can
+    reach into the shell at runtime.
     """
     farben = colors or COLORS
+    leer = RULE_PERCENT if percent else ""
     body = ""
     if power and kind == "d":
         body += RULE_COLOR % farben[power]
@@ -122,23 +165,35 @@ def css_rule(power=None, level=None, kind="d", colors=None):
         # the level is fine - seen on the phone, an orange filling in a
         # battery that was 84 % full.
         body += RULE_PALETTE % ", ".join(parts)
-    return RULE % body if body else ""
+    return (RULE % body if body else "") + leer
 
 
-TOKEN = hashlib.sha1((RULE + RULE_COLOR + RULE_PALETTE
-                      + "".join(KINDS)).encode()).hexdigest()[:4]
+# The colours belong in the fingerprint as much as the rule does. GTK3
+# restyles when the theme NAME changes, not when the file underneath it
+# does - so recolouring a bucket while that bucket is the one on screen
+# would rewrite a stylesheet nobody re-reads, and the old colour would sit
+# there until the power happened to move to another bucket and back.
+# Folding COLORS in means a new colour is a new name, which restyles at
+# once and lets stale_themes() carry the old generation off the disk.
+TOKEN = hashlib.sha1((RULE + RULE_COLOR + RULE_PALETTE + RULE_PERCENT
+                      + "".join(KINDS)
+                      + "".join("%s=%s" % kv for kv in sorted(COLORS.items()))
+                      ).encode()).hexdigest()[:4]
 
 # Matches a name of ours - the current shape "<base>-batt<token>-<power>-
 # <level>" and the ones older versions wrote, which is what lets an upgrade
 # recognise its own leftovers instead of taking them for somebody's theme.
 MARK = re.compile(r"^(?P<base>.+)-batt[0-9a-f]{0,8}"
                   r"-(?P<power>none|%s)(?:-(?P<level>none|%s))?"
-                  r"(?:-(?P<kind>[cd]))?$"
+                  r"(?:-(?P<kind>[cd]))?(?:-(?P<percent>p))?$"
                   % ("|".join(BUCKETS), "|".join(BUCKETS)))
 
 DEFAULTS = {
-    # Colour while charging. On by default - it is what this is for.
-    "charging": True,
+    # Colour while charging - what this tool is for, and still off until
+    # somebody switches it on. Nothing this project installs turns itself on:
+    # an install that starts changing the phone on its own has decided
+    # something that was not asked of it.
+    "charging": False,
     # Colour on battery too, with the meaning reversed: green is a phone that
     # is drawing little. Off by default, because a colour that is on all day
     # stops being a signal.
@@ -161,8 +216,8 @@ DEFAULTS = {
     "drain_red_w": 5.0,
     # The filling says something else entirely: how full the battery is.
     # Above level_amber_pct it stays in the panel's own colour, below
-    # level_red_pct it is red.
-    "level": True,
+    # level_red_pct it is red. Off like the rest until it is asked for.
+    "level": False,
     "level_amber_pct": 60.0,
     "level_red_pct": 15.0,
     # Two points of hysteresis, so a percentage sitting on 60 and stepping
@@ -179,6 +234,20 @@ DEFAULTS = {
     "dwell_s": 45,
     # How long a reading counts towards the median.
     "window_s": 60,
+    # The time left, in the place phosh puts the percentage. Off by default:
+    # it takes the percentage away, and that is not a thing to do to somebody
+    # who only asked for a coloured icon.
+    "runtime": False,
+    # The same while the cable is in, which is a different question and so a
+    # different switch: how long until full, not how long it lasts. Without
+    # it the percentage stands there while charging - which is what somebody
+    # who only wanted to know how long the phone lasts would expect to see.
+    "charge_time": False,
+    # Its own window, and a much longer one than the colour uses. The colour
+    # has to react to a cable being pulled; a time left has to be readable,
+    # and a number that jumps by two hours while nothing happens is worse
+    # than no number - see Daemon.runtime.
+    "runtime_window_s": 300,
 }
 
 # Where the icons live. The user's directories FIRST, which is the order
@@ -539,6 +608,83 @@ def merge_colours(power, level):
 # microamps would produce a thousandfold number and a permanently green icon.
 # Better to say nothing than to say something wrong.
 MAX_PLAUSIBLE_W = 60.0
+# The same idea for a time. Above this it is not a runtime any more, it is a
+# current of almost nothing divided into a full battery.
+MAX_PLAUSIBLE_H = 99.0
+
+
+def runtime_hours(reading, ampere=None):
+    """How long the battery has left, in hours - or None.
+
+    Discharging: what is in it over what is going out. Charging: what is
+    missing over what is going in. Both from charge_counter and charge_full,
+    in microampere-hours against amperes, so the micro cancels.
+
+    None rather than a guess wherever a piece is missing - no reading, a
+    cable in with nothing moving, a current of zero, a driver without the
+    attributes. This is the one number somebody plans around, and a wrong
+    time is worse than no time.
+    """
+    if reading is None or not reading.get("moving"):
+        return None
+    have, full = reading.get("charge_uah"), reading.get("charge_full_uah")
+    if not have or not full:
+        return None
+    strom = reading.get("ampere") if ampere is None else ampere
+    if not strom or strom <= 0:
+        return None
+    left = (full - have) if reading.get("charging") else have
+    if left <= 0:
+        return None
+    hours = left / 1e6 / strom
+    return hours if 0 < hours <= MAX_PLAUSIBLE_H else None
+
+
+def strip_wanted(cfg):
+    """Is the strip wanted at all?
+
+    Either switch puts it up. The one that is off falls back to the
+    percentage in the same place, so the bar does not rearrange itself when
+    a cable goes in - which it would if the strip came and went with the
+    direction, and every coming and going restyles all GTK3 apps.
+    """
+    return bool(cfg["runtime"] or cfg["charge_time"])
+
+
+def time_wanted(reading, cfg):
+    """Is a time wanted for what the battery is doing right now?
+
+    Two switches, because they answer two questions. "How long does it last"
+    is asked of a phone on battery; "how long until it is full" is asked of
+    one on a cable, and somebody may well want one and not the other. What
+    is not wanted falls back to the percentage rather than to nothing.
+    """
+    if reading is None or not reading.get("moving"):
+        return False
+    return bool(cfg["charge_time"] if reading.get("charging")
+                else cfg["runtime"])
+
+
+def format_runtime(hours):
+    """Hours as a clock says them: 05:33. None stays None."""
+    if hours is None:
+        return None
+    minutes = int(round(hours * 60))
+    return "%02d:%02d" % (minutes // 60, minutes % 60)
+
+
+def runtime_label(reading, text):
+    """What goes where the percentage was.
+
+    The time when it can be said, the percentage when it cannot. Never
+    nothing: a blank spot where a number used to be reads as a fault, and a
+    full battery or a cable that moves nothing are ordinary states. So the
+    strip falls back to exactly what it replaced.
+    """
+    if text:
+        return text
+    percent = (reading or {}).get("percent")
+    return "" if percent is None else "%d%%" % int(percent)
 
 
 # --------------------------------------------------------------- Konfiguration
@@ -582,6 +728,20 @@ def save_config(cfg, path=None):
 
 # ------------------------------------------------------------------- Messung
 
+def _uah(name, base=None):
+    """A charge in microampere-hours, or None.
+
+    Zero is None here as well: an unpopulated attribute reads as 0 on this
+    driver, and a battery holding nothing would divide into a runtime of
+    nothing.
+    """
+    try:
+        value = int(_read(name, base))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def _read(name, base=None):
     try:
         with open(os.path.join(base or SYSFS, name)) as fh:
@@ -615,12 +775,29 @@ def read_battery(base=None):
     except (TypeError, ValueError):
         percent = None
     watt = ampere * volt
+    # The gauge's own average, where the driver offers one. Same units, same
+    # sign convention, and far steadier: measured on 16.9.2026 within one
+    # second, current_now said 0.603 A and current_avg 0.378 A for the same
+    # steady discharge.
+    try:
+        ampere_avg = abs(int(_read("current_avg", base))) / 1e6
+    except (TypeError, ValueError):
+        ampere_avg = None
     return {
         "status": status,
         "percent": percent,
         "ampere": ampere,
+        "ampere_avg": ampere_avg,
         "volt": volt,
         "watt": watt,
+        # What is in the battery and what fits in it, in microampere-hours.
+        # charge_counter, not charge_now: this driver has no charge_now, and
+        # charge_counter agrees with `capacity` to the percent (2 097 600 of
+        # 4 370 000 = 48.0 %, read in the same second capacity said 48).
+        # charge_full_design is NOT a substitute - this phone reports it a
+        # factor of ten smaller than charge_full.
+        "charge_uah": _uah("charge_counter", base),
+        "charge_full_uah": _uah("charge_full", base),
         "charging": status == "Charging",
         # "Full" and "Not charging" are neither: the cable is in and nothing
         # is moving. Colouring that red would be a fault report for a phone
@@ -732,9 +909,16 @@ def colours_of(name):
     return (weiche(treffer.group("power")), weiche(treffer.group("level")))
 
 
-def theme_name(base, power=None, level=None, kind="d"):
-    return "%s-batt%s-%s-%s-%s" % (base, TOKEN, power or "none",
-                                   level or "none", kind)
+def theme_name(base, power=None, level=None, kind="d", percent=False):
+    return "%s-batt%s-%s-%s-%s%s" % (base, TOKEN, power or "none",
+                                     level or "none", kind,
+                                     "-p" if percent else "")
+
+
+def blanks_percentage(name):
+    """Does this theme name stand for one that empties the percentage?"""
+    treffer = MARK.match(name or "")
+    return bool(treffer and treffer.group("percent"))
 
 
 def base_css(base):
@@ -779,7 +963,7 @@ def _import(target):
 
 
 def write_theme(base, power=None, level=None, kind="d", themes_dir=None,
-                colors=None):
+                colors=None, percent=False):
     """Write the theme for one combination. Returns its name, or None.
 
     Written when it is needed rather than all twelve up front: most phones
@@ -790,14 +974,14 @@ def write_theme(base, power=None, level=None, kind="d", themes_dir=None,
     have been updated by a package - a stale copy of its name with a fresh
     stylesheet underneath is the kind of difference nobody would look for.
     """
-    rule = css_rule(power, level, kind, colors)
+    rule = css_rule(power, level, kind, colors, percent)
     if not rule:
         return None                       # nothing to say - that is the base
     light, dark = base_css(base)
     if light is None:
         return None
     root_dir = themes_dir or THEMES
-    name = theme_name(base, power, level, kind)
+    name = theme_name(base, power, level, kind, percent)
     gtk3 = os.path.join(root_dir, name, "gtk-3.0")
     os.makedirs(gtk3, exist_ok=True)
     header = ("/* Written by battctl (furios_misc). Deleted by "
@@ -926,6 +1110,130 @@ def icon_setting():
                    umgebung="FURIOS_BATTERY_ICON_SETTING_FILE")
 
 
+def percent_setting():
+    """The key that shows the percentage beside the icon.
+
+    Through `gsettings` and not through Gio even in the daemon, unlike the
+    theme: this one is written twice in the life of a daemon - once when the
+    strip goes up, once when it comes down - so a process per change costs
+    nothing and keeps one class for all three keys.
+    """
+    return Setting(schluessel=PERCENT_SETTING,
+                   umgebung="FURIOS_BATTERY_PERCENT_SETTING_FILE")
+
+
+def load_state(path=None):
+    """What we remember across runs. Broken file reads as nothing known."""
+    try:
+        with open(path or STATE) as fh:
+            state = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return state if isinstance(state, dict) else {}
+
+
+def save_state(state, path=None):
+    """What we remember, written for this user alone.
+
+    0600 rather than whatever the umask says. It is one line about one
+    setting, but the umask on this phone is 002 and a sibling project had
+    exactly this kind of file group-writable - a second account could decide
+    what the shell looked like. Cheap to get right, awkward to notice.
+    """
+    target = path or STATE
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    tmp = target + ".new"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        json.dump(state, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+    os.replace(tmp, target)
+
+
+def claim_percentage_space(setting=None, state_path=None):
+    """Make sure phosh keeps reserving the percentage's place - and write
+    down what the setting was first.
+
+    Not "hide it": the time goes exactly where the percentage was, and that
+    place only exists while phosh is still laying the percentage out. So the
+    key has to be ON, and the text is emptied by the theme instead.
+
+    Remembered rather than assumed: somebody who had the percentage switched
+    off must not be left with it on afterwards because of us. Written once,
+    so a daemon restarted while the strip is up does not overwrite the real
+    answer with our own "true".
+    """
+    setting = setting or percent_setting()
+    was = setting.get()
+    if was in ("true", "false"):
+        state = load_state(state_path)
+        if "percent_was" not in state:
+            state["percent_was"] = was
+            save_state(state, state_path)
+    return True if was == "true" else setting.set("true")
+
+
+def percentage_switched_off(setting=None):
+    """Has somebody switched the percentage off while we hold the place?
+
+    Asked on every tick, because the answer can change without us: the
+    switch is in phosh-mobile-settings under Top Bar and it is the same key.
+    Off means phosh stops laying the percentage out, the battery icon moves
+    into the freed space, and the place our clock stands in is gone - so
+    that is the moment to stand down rather than draw over an icon.
+    """
+    return (setting or percent_setting()).get() == "false"
+
+
+def strip_action(option_on, strip_up, percentage_off, yielded):
+    """What the strip does this tick. One of:
+
+      "up"    build it and hide the percentage
+      "hold"  it is up and right - just write the time into it
+      "down"  take it away and give the percentage back
+      "yield" the same, but because somebody switched the percentage off
+              and took the place our clock stands in with it
+      "wait"  the option is on and we have yielded to that decision
+      "reset" the option went off while we were standing down - forget it,
+              so switching it on again is a fresh start rather than a
+              switch that does nothing for ever
+      "idle"  nothing to do
+
+    Its own function because the interesting case is a three-way one and it
+    lives in the daemon's main loop otherwise, where GTK and a compositor
+    stand between a test and the decision. The rule it encodes: the place
+    our clock stands in belongs to phosh's percentage, so whoever switches
+    that off has taken it, and we stand down - once, not once a tick.
+    """
+    if not option_on:
+        if strip_up:
+            return "down"
+        return "reset" if yielded else "idle"
+    if strip_up:
+        return "yield" if percentage_off else "hold"
+    return "wait" if yielded else "up"
+
+
+def release_percentage_space(setting=None, state_path=None):
+    """Put the setting back the way it was found, once, and forget it.
+
+    Idempotent, because it is called from three places that may all happen:
+    the daemon on SIGTERM, `battctl reset` from ExecStopPost after a kill -9,
+    and `battctl restore` from the app. Nothing known means nothing to undo -
+    a phone whose setting we never touched is not ours to change.
+    """
+    state = load_state(state_path)
+    was = state.pop("percent_was", None)
+    if was is None:
+        return True
+    setting = setting or percent_setting()
+    # Only what we switched on. If it is off again, somebody did that
+    # themselves and that decision outranks the one we wrote down.
+    ok = setting.get() != "true" or setting.set(was)
+    save_state(state, state_path)
+    return ok
+
+
 def use_icon_theme(setting=None, root_dir=None, source=None):
     """Write our icon theme and switch to it. Returns True if it is in use.
 
@@ -988,6 +1296,13 @@ def describe(cfg=None, setting=None, base=None):
         "ampere": round((reading or {}).get("ampere", 0.0), 3),
         "volt": round((reading or {}).get("volt", 0.0), 3),
         "percent": (reading or {}).get("percent"),
+        # The time from THIS reading alone, and only if the switch for this
+        # direction is on - this is what the bar would say, not what could
+        # be worked out. A single read of current_now is half an hour out
+        # either way, which is fine for a status line somebody asked for and
+        # not fine for a number standing in the bar all day.
+        "runtime": (format_runtime(runtime_hours(reading))
+                    if time_wanted(reading, cfg) else None),
         "readable": reading is not None,
         "plausible": (reading or {}).get("plausible", False),
         "bucket": bucket or "none",
@@ -1052,14 +1367,18 @@ def cmd_status(argv):
     print("filling:      %s (plain above %d %%, amber below, red below %d %%)"
           % ("on" if cfg["level"] else "off",
              int(cfg["level_amber_pct"]), int(cfg["level_red_pct"])))
+    print("time left:    %s (on battery)" % ("on" if cfg["runtime"] else "off"))
+    print("charge time:  %s (on a cable)" % ("on" if cfg["charge_time"] else "off"))
+    print("would show:   %s"
+          % (state["runtime"] or "the percentage - no time for this state"))
     return 0 if state["readable"] else 1
 
 
 # Which config keys `battctl config` will take, and how to read the value.
-SCHALTER = ("charging", "discharging", "level")
+SCHALTER = ("charging", "discharging", "level", "runtime", "charge_time")
 ZAHLEN = ("charge_green_w", "charge_amber_w", "drain_amber_w", "drain_red_w",
           "level_amber_pct", "level_red_pct", "level_hysteresis_pct",
-          "dwell_s", "window_s", "hysteresis")
+          "dwell_s", "window_s", "runtime_window_s", "hysteresis")
 
 
 def cmd_config(argv):
@@ -1109,13 +1428,19 @@ def cmd_config(argv):
 
 
 def cmd_reset(_argv):
-    """Put the user's own theme back. Idempotent, and safe to call twice."""
+    """Put the user's own theme back, and the percentage with it.
+
+    Idempotent, and safe to call twice. This is what ExecStopPost runs, so
+    it is also the answer to a kill -9: a phone left with no percentage by a
+    daemon that is gone has lost a reading and been given nothing for it.
+    """
+    zurueck = release_percentage_space()
     setting = Setting()
     current = setting.get()
     base = base_name(current)
-    if current == base:
-        return 0
-    return 0 if setting.set(base) else 1
+    if current != base and not setting.set(base):
+        return 1
+    return 0 if zurueck else 1
 
 
 def cmd_restore(_argv):
@@ -1126,13 +1451,16 @@ def cmd_restore(_argv):
     be fighting its own front end. The daemon notices the themes are gone and
     writes them again, which is why the app stops the service first.
     """
+    # reset first: it is what puts the percentage back, and it has to read
+    # the state file before that file goes.
     cmd_reset([])
     gone = remove_themes()
     icons = drop_icon_theme()
-    try:
-        os.unlink(CONFIG)
-    except OSError:
-        pass
+    for datei in (CONFIG, STATE):
+        try:
+            os.unlink(datei)
+        except OSError:
+            pass
     print("Own theme restored, %d colour theme(s) and %d icon copies removed."
           % (gone, icons))
     return 0
@@ -1147,12 +1475,26 @@ class Daemon:
         self.cfg = cfg or load_config()
         self.setting = setting or Setting()
         self.samples = []                 # (when, watts, charging)
+        # Its own, longer window, and amperes rather than watts: a time left
+        # is a charge divided by a current, and the voltage in between would
+        # only add its own noise.
+        self.runtime_samples = []         # (when, amperes, charging)
+        # The last usable reading, kept for whoever draws the time. The tick
+        # already has it; asking /sys a second time would be a second answer
+        # to the same question.
+        self.last_reading = None
         # (power, filling) - the names of the colours, not of the theme
         self.showing = (None, None)
         # Which shape the power colour is on, and which it should be on:
         # "c" the bolt of a charging icon, "d" the frame.
         self.kind_showing = "d"
         self.kind = "d"
+        # Whether phosh's percentage should be emptied, and whether the theme
+        # on screen actually does it. Two names, because between the two lies
+        # a theme that may fail to be written - and the strip must not go up
+        # over a percentage that is still readable.
+        self.blank_percent = False
+        self.blank_showing = False
         self.last_change = 0.0
         self.last_good = 0.0              # when something usable last arrived
         self.cfg_stamp = self._stamp()
@@ -1189,7 +1531,8 @@ class Daemon:
 
     def ensure_theme(self, power, level, kind="d"):
         """The theme for one combination, written if it is not there yet."""
-        return write_theme(self.base, power, level, kind)
+        return write_theme(self.base, power, level, kind,
+                           percent=bool(self.blank_percent))
 
     def adopt(self, name):
         """Somebody changed the theme while we were running.
@@ -1202,6 +1545,9 @@ class Daemon:
             return False
         self.base = base_name(name)
         self.showing = (None, None)
+        # Their theme carries none of our rules, the emptied percentage
+        # included - so it is on screen again until we write ours afresh.
+        self.blank_showing = blanks_percentage(name)
         return True
 
     def sample(self, now=None, reading=None):
@@ -1212,6 +1558,14 @@ class Daemon:
         self.samples.append((now, reading["watt"], reading["charging"]))
         grenze = now - self.cfg["window_s"]
         self.samples = [s for s in self.samples if s[0] >= grenze]
+        # The gauge's average where the driver has one, the instantaneous
+        # current where it has not.
+        self.runtime_samples.append(
+            (now, reading.get("ampere_avg") or reading["ampere"],
+             reading["charging"]))
+        grenze = now - self.cfg["runtime_window_s"]
+        self.runtime_samples = [s for s in self.runtime_samples
+                                if s[0] >= grenze]
         return reading
 
     def decide(self, reading, now=None):
@@ -1235,6 +1589,31 @@ class Daemon:
         smoothed["watt"] = middle
         return wanted_bucket(smoothed, self.cfg, self.showing[0], self.icon)
 
+    def runtime(self, reading=None):
+        """The time to show, smoothed the way the colour is - or None.
+
+        Only the samples going the same way as the reading count. A cable
+        pulled halfway through the window would otherwise average a charge
+        current into a discharge and produce a time that was never true of
+        either direction.
+
+        None when the switch for this direction is off - and then the strip
+        shows the percentage, which is what it falls back to.
+
+        Why smoothing at all: measured on 16.9.2026 in one second,
+        current_now gave 0.603 A and current_avg 0.378 A on the same steady
+        discharge - 03:29 against 05:33 for the same battery. The number
+        replaces a percentage that moves once a minute, so it has to be at
+        least that calm.
+        """
+        reading = self.last_reading if reading is None else reading
+        if not time_wanted(reading, self.cfg):
+            return None
+        gleich = [a for (_, a, c) in self.runtime_samples
+                  if c == reading["charging"]]
+        mitte = median(gleich) if gleich else reading.get("ampere")
+        return format_runtime(runtime_hours(reading, mitte))
+
     def apply(self, pair, now=None, kind=None):
         """Set the theme for (power colour, filling colour).
 
@@ -1246,12 +1625,18 @@ class Daemon:
         now = time.time() if now is None else now
         pair = tuple(pair)
         kind = self.kind if kind is None else kind
-        if pair == self.showing and kind == self.kind_showing:
+        blank = bool(self.blank_percent)
+        if (pair == self.showing and kind == self.kind_showing
+                and blank == self.blank_showing):
             return False
-        if (self.showing != (None, None)
+        # The dwell exists so a wobbling colour does not restyle every GTK3
+        # app twice a minute. A change of the blanking is not a wobble, it is
+        # somebody throwing a switch - and waiting 45 s for it would leave
+        # the percentage and our clock in the bar side by side.
+        if (self.showing != (None, None) and blank == self.blank_showing
                 and now - self.last_change < self.cfg["dwell_s"]):
             return False
-        if pair == (None, None):
+        if pair == (None, None) and not blank:
             target = self.base
         else:
             target = self.ensure_theme(pair[0], pair[1], kind)
@@ -1261,6 +1646,7 @@ class Daemon:
             return False
         self.showing = pair
         self.kind_showing = kind
+        self.blank_showing = blank
         self.last_change = now
         return True
 
@@ -1278,6 +1664,7 @@ class Daemon:
             if zeigt != ("", "") and self.showing == (None, None):
                 self.showing = zeigt
         measured = self.sample(now, reading)
+        self.last_reading = measured
         if measured is None:
             # Nothing readable this time. One failed read is not a reason to
             # restyle every app on the phone, so the colour stays - but not
@@ -1301,6 +1688,174 @@ class Daemon:
             # instead the more urgent of the two speaks for the whole icon.
             shell = filling = merge_colours(shell, filling)
         return self.apply((shell, filling), now, self.kind)
+
+
+class RuntimeLabel:
+    """The strip in the top bar where the percentage used to be.
+
+    Layer-shell on OVERLAY, because phosh's own bar sits on TOP and draws
+    over everything under it - a window on TOP maps, reports a size and
+    cannot be seen. That is the finding killswitch-indicator is built on,
+    and this reuses it rather than rediscovering it.
+
+    It also reuses the trap that came with it. The input region is emptied
+    from `draw` and from nowhere else: the strip is anchored left AND right,
+    so it lies across the whole bar, and a strip that takes touch swallows
+    the swipe to the quick settings - on the lock screen, the swipe that
+    unlocks. Setting the region at realize time looks right in the source
+    and never reaches the compositor.
+    """
+
+    # Logical px from the right edge to the end of our text, measured on the
+    # device with grim rather than derived - the label carries trailing space
+    # that no constant here can be read off.
+    #
+    # 15 puts the ink at 642..695 on this 720 px screen, i.e. 11 px clear of
+    # the battery icon, where the percentage stood 13 px clear of it. It does
+    # NOT end where the percentage ended (686): "05:45" is 53 px wide and
+    # "49 %" was 43, so the gap to the icon and the right-hand padding cannot
+    # both match. The gap is the one that shows - at 24, which lines the
+    # right edges up, the clock touches the battery icon.
+    RIGHT_MARGIN = 15
+    BAR_HEIGHT = 32
+    # phosh's own weight and figures, copied from its stylesheet rather than
+    # guessed:
+    #
+    #   phosh-top-panel .indicators { font-size: 13px; font-weight: 800;
+    #                                 font-feature-settings: "tnum"; }
+    #
+    # (gresource extract /usr/libexec/phosh /mobi/phosh/stylesheet/common.css)
+    # 800, not bold - bold is 700 and sits visibly lighter beside the icons.
+    # "tnum" is the one that matters most: with proportional digits a clock
+    # changes width at every digit and shifts under itself once a minute. No
+    # text shadow - phosh's indicators have none.
+    #
+    # The SIZE is ours, and deliberately not phosh's 13. A percentage is
+    # glanced at; a time is read, and 13 px was too small to read at arm's
+    # length on this screen. 16 is phosh's own clock size, so it is a size
+    # that already exists in this bar rather than a new one.
+    FONT_PX = 16
+    CSS = b"""
+#battery-runtime { background: transparent; }
+#battery-runtime label {
+    color: #ffffff;
+    font-size: %dpx;
+    font-weight: 800;
+    font-feature-settings: "tnum";
+}
+"""
+
+    @classmethod
+    def start(cls):
+        """The strip, or None and a line saying why.
+
+        None and not an exception: this is the cosmetic half of a cosmetic
+        daemon. A phone without gtk-layer-shell should still get its
+        coloured icon, and should be told in one line what it is missing.
+        """
+        try:
+            return cls()
+        except Exception as error:                  # noqa: BLE001
+            print("no strip in the top bar (%r) - the colour still works"
+                  % (error,), file=sys.stderr, flush=True)
+            return None
+
+    def __init__(self):
+        import gi
+        gi.require_version("Gtk", "3.0")
+        gi.require_version("GtkLayerShell", "0.1")
+        from gi.repository import Gtk, GtkLayerShell
+        import cairo
+
+        self.cairo = cairo
+        self.text = None
+        # False once the window is gone. A compositor that restarts takes
+        # every layer surface with it, and without this the daemon would go
+        # on holding a dead window - a bar with nothing in it and an emptied
+        # percentage behind it, until something else rebuilt the strip.
+        self.alive = True
+        # Whether the compositor has been told this strip takes no touch.
+        # False until a draw has actually pushed it - see on_draw.
+        self.input_region_set = False
+
+        self.win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+        self.win.set_app_paintable(True)
+        screen = self.win.get_screen()
+        visual = screen.get_rgba_visual()
+        if visual is not None:
+            self.win.set_visual(visual)
+
+        GtkLayerShell.init_for_window(self.win)
+        GtkLayerShell.set_layer(self.win, GtkLayerShell.Layer.OVERLAY)
+        for edge in (GtkLayerShell.Edge.TOP, GtkLayerShell.Edge.LEFT,
+                     GtkLayerShell.Edge.RIGHT):
+            GtkLayerShell.set_anchor(self.win, edge, True)
+        # -1: take no space of our own and do not get pushed below the bar
+        # that already takes some.
+        GtkLayerShell.set_exclusive_zone(self.win, -1)
+        GtkLayerShell.set_namespace(self.win, "furios-battery-runtime")
+
+        self.label = Gtk.Label(label="")
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        box.set_name("battery-runtime")
+        box.set_halign(Gtk.Align.END)
+        box.set_valign(Gtk.Align.CENTER)
+        box.set_margin_end(self.RIGHT_MARGIN)
+        box.pack_start(self.label, False, False, 0)
+        self.win.set_size_request(-1, self.BAR_HEIGHT)
+        self.win.add(box)
+
+        provider = Gtk.CssProvider()
+        provider.load_from_data(self.CSS % self.FONT_PX)
+        Gtk.StyleContext.add_provider_for_screen(
+            screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+        self.win.connect("draw", self.on_draw)
+        self.win.connect("map-event", self.on_map_event)
+        self.win.connect("size-allocate", self.on_size_allocate)
+        self.win.connect("destroy", self.on_destroy)
+        self.win.show_all()
+
+    def on_draw(self, _widget, _cr):
+        """Let every touch through: an empty input region, from here.
+
+        Not from `realize`. Traced on the device in the sibling project: the
+        surface a region is set on at realize time is not the one the window
+        ends up with, and GDK pushes a region to the compositor only while it
+        paints. Set anywhere else the call sits in a field nobody sends, and
+        the strip silently keeps taking touch across the whole bar.
+        """
+        if not self.input_region_set:
+            gdk_window = self.win.get_window()
+            if gdk_window is not None:
+                gdk_window.input_shape_combine_region(self.cairo.Region(), 0, 0)
+                self.input_region_set = True
+        return False
+
+    def on_map_event(self, _widget, _event):
+        """A new surface carries no region of ours; the next draw sets it."""
+        self.input_region_set = False
+        return False
+
+    def on_size_allocate(self, _widget, _allocation):
+        """The strip changes width with the text. Empty either way, but it
+        costs one commit to be sure of it."""
+        self.input_region_set = False
+
+    def on_destroy(self, *_):
+        self.alive = False
+
+    def set(self, text):
+        """The text, written only when it changed."""
+        if text == self.text:
+            return False
+        self.text = text
+        self.label.set_text(text)
+        return True
+
+    def close(self):
+        self.alive = False
+        self.win.destroy()
 
 
 def cmd_daemon(_argv):
@@ -1335,6 +1890,54 @@ def cmd_daemon(_argv):
             Gio.Settings.sync()
             return gesetzt
 
+    # GTK has to be up before a window of ours can be, and it has to be up
+    # in this process: the strip shares this main loop. init_check rather
+    # than init, because a daemon started without a display should go on
+    # colouring rather than abort.
+    strip = None
+    # Set once the percentage has been switched off by hand while our strip
+    # was up. It stops the next tick from claiming the place again.
+    yielded = False
+    # Whether a lock screen is over us. Asked once at startup and kept up to
+    # date by the signal - a daemon restarted while the phone is locked would
+    # otherwise empty a percentage that is the only thing on the lock screen.
+    locked = False
+    try:
+        gi.require_version("Gtk", "3.0")
+        from gi.repository import Gtk
+        Gtk.init_check([])
+    except (ValueError, ImportError) as error:
+        print("no GTK here (%s) - the time left cannot be drawn" % error,
+              file=sys.stderr, flush=True)
+
+    class GioFlag(Setting):
+        """The percentage key, read inside this process.
+
+        Same class and the same "true"/"false" strings, so everything built
+        on Setting is unchanged - but no fork per reading. Measured before
+        this existed: the daemon spent 0.29 s of every 60 in child
+        processes, two thirds of all the CPU it used, for one `gsettings
+        get` on every tick. The theme key had been given this treatment for
+        the same reason; the new key went in through the front door and
+        undid it.
+        """
+
+        def __init__(self):
+            super().__init__()
+            self.file_ = None
+            schema, schluessel = PERCENT_SETTING.split()
+            self.gio = Gio.Settings.new(schema)
+            self.schluessel = schluessel
+
+        def get(self):
+            return "true" if self.gio.get_boolean(self.schluessel) else "false"
+
+        def set(self, value):
+            gesetzt = self.gio.set_boolean(self.schluessel, value == "true")
+            Gio.Settings.sync()
+            return gesetzt
+
+    prozent = GioFlag()
     daemon = Daemon(setting=GioSetting())
     # Leftovers from an older rule, before anything new is written: the
     # names differ, so nothing in use is touched.
@@ -1361,6 +1964,127 @@ def cmd_daemon(_argv):
 
     loop_ = GLib.MainLoop()
     proxy = None
+    screensaver = None
+
+    def draw_time():
+        """The strip follows the setting, in both directions.
+
+        Built on the first tick that wants it rather than at startup: the
+        app switches this on by writing the config, and a daemon that only
+        looked once would leave the switch looking broken until the next
+        boot. Taken down the same way, and the percentage comes back with
+        it - the strip and the gap it fills are one decision.
+        """
+        nonlocal strip, yielded
+        # percentage_switched_off() only where the answer is used, so an
+        # ordinary tick with no strip and no option costs no gsettings call.
+        # The strip may be gone without us: a compositor that restarts takes
+        # every layer surface with it, and a dead window that nobody notices
+        # is a bar with nothing in it and an emptied percentage behind it.
+        if strip is not None and not strip.alive:
+            strip = None
+        action = strip_action(
+            strip_wanted(daemon.cfg), strip is not None,
+            strip is not None and percentage_switched_off(prozent), yielded)
+        if action == "up" and locked:
+            # Nothing of ours can be seen behind a lock screen, so there is
+            # nothing to take the percentage away for yet. It goes up when
+            # the phone is unlocked.
+            return
+
+        if action == "reset":
+            yielded = False
+        elif action in ("down", "yield"):
+            strip.close()
+            strip = None
+            daemon.blank_percent = False
+            daemon.apply(daemon.showing, now=time.time() + daemon.cfg["dwell_s"])
+            release_percentage_space(prozent)
+            yielded = action == "yield"
+            if action == "down":
+                print("time left off, phosh's percentage back", flush=True)
+            else:
+                # The place our clock stands in is phosh's percentage slot.
+                # Switched off in phosh-mobile-settings it is gone, the
+                # battery icon moves into it, and drawing on would put the
+                # time on top of the icon.
+                print("the percentage was switched off by hand - the time "
+                      "left stands down until this option is switched off "
+                      "and on again", file=sys.stderr, flush=True)
+        elif action == "up":
+            # The place first, then the thing that stands in it. Both have
+            # to succeed: a strip over a percentage that is still readable
+            # would be two numbers in one spot.
+            claim_percentage_space(prozent)
+            daemon.blank_percent = True
+            daemon.apply(daemon.showing, now=time.time() + daemon.cfg["dwell_s"])
+            if not daemon.blank_showing:
+                daemon.blank_percent = False
+                release_percentage_space(prozent)
+                print("the percentage could not be emptied (no usable GTK3 "
+                      "theme) - no time in the bar", file=sys.stderr,
+                      flush=True)
+            else:
+                strip = RuntimeLabel.start()
+                if strip is None:
+                    daemon.blank_percent = False
+                    daemon.apply(daemon.showing,
+                                 now=time.time() + daemon.cfg["dwell_s"])
+                    release_percentage_space(prozent)
+                else:
+                    print("time left where the percentage was", flush=True)
+        if strip is not None:
+            # One place decides whether the percentage is emptied, and it is
+            # this: emptied while the strip can be seen, back while it
+            # cannot. Written here rather than in the handler that hears
+            # about locking, so a tick in between puts it right as well.
+            blank = not locked
+            if daemon.blank_percent != blank:
+                daemon.blank_percent = blank
+                daemon.apply(daemon.showing,
+                             now=time.time() + daemon.cfg["dwell_s"])
+                print("locked - phosh's percentage is back" if locked
+                      else "unlocked - the time has the place again",
+                      flush=True)
+            strip.set(runtime_label(daemon.last_reading, daemon.runtime()))
+
+    def screensaver_changed(_proxy, _sender, signal, params):
+        """Locked or unlocked - and with it, who owns the percentage slot.
+
+        Locked, the strip cannot be seen at all: phoc has no session-lock
+        protocol, so the lock screen is an ordinary layer surface on the same
+        OVERLAY layer, and within a layer the newest is on top - the lock
+        screen is created when the phone is locked, i.e. after us. Measured
+        with two strips side by side: the one started second covers the
+        first.
+
+        But the theme empties the percentage everywhere, the lock screen
+        included, so leaving it emptied while the strip is hidden left the
+        bar there with a battery icon and nothing beside it. Reported on
+        16.9.2026.
+
+        So the blanking is lifted for as long as the phone is locked and
+        phosh shows its own percentage - the lock screen looks exactly as it
+        did before this option existed.
+
+        Why not the other way round, putting the strip back on top of the
+        lock screen: the moment to do that is when the screen comes ON while
+        locked, and there is no dependable signal for it. Rebuilding on the
+        lock itself was measured and leaves no strip at all - locking turns
+        the panel off in the same breath, and a layer surface created against
+        an output that is off is never configured. PowerSaveMode looked like
+        the answer and is not: it was emitted on one lock and not on the
+        next.
+
+        Nothing is decided here beyond the fact itself. draw_time acts on it,
+        so an ordinary tick puts things right as well - this signal is how it
+        happens at once, not the only way it can happen.
+        """
+        nonlocal locked
+        if signal != "ActiveChanged":
+            return
+        locked = params.get_child_value(0).get_boolean()
+        draw_time()
 
     def wake_up(*_):
         try:
@@ -1369,7 +2093,12 @@ def cmd_daemon(_argv):
                 # the signal that woke us.
                 name = proxy.get_cached_property("IconName")
                 daemon.icon = name.get_string() if name else None
-            if daemon.tick():
+            geaendert = daemon.tick()
+            # After the tick, so it draws this reading and not the one
+            # before it; outside the `if`, because the time moves on every
+            # reading while the colour moves on very few.
+            draw_time()
+            if geaendert:
                 print("shell %s, filling %s -> %s"
                       % (daemon.showing[0] or "plain",
                          daemon.showing[1] or "plain",
@@ -1381,7 +2110,11 @@ def cmd_daemon(_argv):
 
     def shutdown(*_):
         # The theme goes back before we do. A green icon left behind on a
-        # phone whose daemon is gone would be a lie that outlives it.
+        # phone whose daemon is gone would be a lie that outlives it - and a
+        # missing percentage with nothing in its place is the same thing
+        # said by an absence.
+        release_percentage_space()
+        daemon.blank_percent = False
         daemon.apply((None, None), now=time.time() + daemon.cfg["dwell_s"])
         loop_.quit()
         return True
@@ -1409,6 +2142,27 @@ def cmd_daemon(_argv):
               % error.message, file=sys.stderr, flush=True)
         proxy = None
 
+    # phosh's screensaver interface, for one thing: while the phone is
+    # locked the strip cannot be seen, so the percentage has to be given back
+    # for that time. Kept in a name of its own for the reason the UPower
+    # proxy is - a subscription whose proxy is collected expires in silence,
+    # with no error and no log line.
+    try:
+        sitzung = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        screensaver = Gio.DBusProxy.new_sync(
+            sitzung, Gio.DBusProxyFlags.DO_NOT_AUTO_START, None,
+            "org.gnome.ScreenSaver", "/org/gnome/ScreenSaver",
+            "org.gnome.ScreenSaver", None)
+        screensaver.connect("g-signal", screensaver_changed)
+        antwort = screensaver.call_sync(
+            "GetActive", None, Gio.DBusCallFlags.NONE, 2000, None)
+        locked = bool(antwort.get_child_value(0).get_boolean())
+    except GLib.Error as error:
+        print("no screensaver to listen to (%s) - the lock screen will show "
+              "no percentage while the time is on" % error.message,
+              file=sys.stderr, flush=True)
+        screensaver = None
+
     # The safety net, and the whole answer when there is no UPower: a slow
     # timer. It also covers the case the comment above warns about - if the
     # subscription ever this_, the colour keeps following, just later.
@@ -1428,8 +2182,8 @@ def cmd_daemon(_argv):
 
     wake_up()
     loop_.run()
-    # Referenced after the loop so nothing can decide the proxy was unused.
-    del proxy
+    # Referenced after the loop so nothing can decide the proxies were unused.
+    del proxy, screensaver
     return 0
 
 
@@ -1691,14 +2445,22 @@ USAGE = """battctl - colour phosh's battery icon by charge power
 
   battctl status [--json]     what the battery is doing and which colour shows
   battctl config              every setting and its value
-  battctl config <key> <val>  charging|discharging on|off, or a threshold in W
+  battctl config <key> <val>  charging|discharging|level on|off for the
+                              colours, runtime|charge_time on|off for the
+                              time in the bar, or a threshold in W
   battctl watch [s] [--csv f] write down what the phone draws, to measure
                               the thresholds instead of guessing them
   battctl summarise <csv>     what a watch log says, and the thresholds it
                               suggests; --apply writes them
   battctl daemon              the loop; this is what the service runs
-  battctl reset               put the user's own theme back
+  battctl reset               put the user's own theme and percentage back
   battctl restore             reset, plus remove the colour themes and config
+
+Everything is off after an install. `runtime` puts the time left where phosh
+shows the percentage (on battery) and `charge_time` does the same on a cable;
+whichever is off shows the percentage instead. The percentage keeps its place
+and is emptied by the theme, so it comes back with `reset`, when the options
+go off, and for as long as the phone is locked.
 
 The service is what turns this on and off:
   systemctl --user enable --now furios-battery-color.service

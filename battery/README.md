@@ -77,7 +77,7 @@ line of CSS colours it:
 
 ```css
 phosh-battery-info image {
-  -gtk-icon-palette: success #ff7800, error #ff7800,   /* filling: < 60 %  */
+  -gtk-icon-palette: success #e5a50a, error #e5a50a,   /* filling: < 60 %  */
                      warning #e01b24;                  /* bolt: 1 W in     */
 }
 ```
@@ -186,16 +186,106 @@ decides but the **median** of a minute; a threshold has to be crossed by a
 tenth before the colour follows, and every colour stays for at least 45
 seconds.
 
+## The time left, instead of the percentage
+
+`battctl config runtime on` puts how long the battery has left where phosh
+shows the percentage, as `05:33`.
+
+`battctl config charge_time on` does the same for a phone on a cable: how
+long until full. Its own switch, because it is its own question - somebody
+who wants to know how long the phone lasts has not thereby asked how long it
+charges. Whichever is switched off shows the percentage instead.
+
+It is a charge over a current: `charge_counter` over `current_avg`, median of
+a five-minute window. Not `current_now` — measured within one second on
+16.9.2026 the two said 0.603 A and 0.378 A for the same steady discharge,
+which is 03:29 against 05:33 for the same battery. Where the time cannot be
+said — a full battery, a cable that moves nothing, a driver without the
+attributes — the strip shows the percentage instead. The spot is never empty.
+
+**How it gets into that spot**, because the obvious way puts it somewhere
+else. Switching the percentage off with its gsettings key frees the space and
+phosh moves the battery icon straight into it: measured on this 720 px screen
+the icon goes from `613..631` to `666..683`, and to its right there is
+nothing but 36 px of phosh's own padding. There is no room to the right of
+the battery icon unless phosh is still reserving it.
+
+So the key stays **on** and the text is emptied by the theme instead — the
+same theme machinery the colour uses, because a theme is the only thing on
+this phone that reaches into the running shell:
+
+```css
+phosh-battery-info label { color: transparent; font-size: 1px;
+                           min-width: 29px; }
+```
+
+Each declaration does a different job. `color` takes the text away and leaves
+the widget. `font-size` stops the percentage's own text from deciding how
+wide the slot is, so 9 %, 48 % and 100 % all reserve the same room — without
+it the icons shift under the clock as the battery empties. `min-width` is
+then the width, and 29 sets it to the 43 screen px that `48 %` occupied,
+found by stepping the value and reading the icon positions out of a
+screenshot (28 → 579/615, 30 → 576/612, wanted 577/613).
+
+The clock itself is a **layer-shell strip** over the top bar, the way
+`killswitch-indicator` draws its icons. Weight and figures are phosh's own
+(`font-weight: 800; font-feature-settings: "tnum"`) rather than guessed;
+`tnum` is the one that matters, because with proportional digits a clock
+changes width at every digit and shifts under itself once a minute. The size
+is **16 px**, phosh's clock size rather than its 13 px indicator size: a
+percentage is glanced at, a time is read.
+
+**On the lock screen** the strip cannot be seen at all. phoc has no
+session-lock protocol, so phosh's lock screen is an ordinary layer surface on
+the same OVERLAY layer, and within a layer the newest is on top - the lock
+screen is created when the phone is locked, which is after us. Measured with
+two strips side by side: the one started second covers the first. So the
+blanking is lifted for as long as the phone is locked, and the lock screen
+looks exactly as it did before this option existed.
+
+Going the other way, putting the strip back on top of the lock screen, needs
+a signal for "the screen came on while locked" and there is none to rely on:
+rebuilding on the lock itself leaves no strip at all - locking turns the
+panel off in the same breath, and a layer surface created against an output
+that is off is never configured - and `PowerSaveMode` was emitted on one lock
+and not on the next. Both measured on 16.9.2026.
+
+**The cost**, and it is the reason this is off by default and worth knowing
+before switching it on: the switch in **phosh-mobile-settings → Top Bar →
+"Show battery percentage"** stays *on* while this runs, so it no longer tells
+you what is in the bar. Switch it off there and the slot goes with it — the
+strip notices and stands down rather than draw over the battery icon, and
+comes back when this option is switched off and on again.
+
+What the setting was is written down before it is touched, so somebody who
+had the percentage switched off is not left with it on afterwards. It goes
+back when the option goes off, when the daemon stops, and from `battctl
+reset` — which is what `ExecStopPost` runs, so a `kill -9` is covered too.
+
 ## What it touches
 
-Nothing it would need root for. It reads four files under
-`/sys/class/power_supply/battery`, writes `~/.themes` and
-`~/.local/share/icons`, and sets two gsettings keys. `battctl restore` takes
-all of that back, `./uninstall.sh` the program as well.
+Nothing it would need root for. It reads seven files under
+`/sys/class/power_supply/battery`, writes `~/.themes`,
+`~/.local/share/icons` and one small state file beside the config, and sets
+three gsettings keys. `battctl restore` takes all of that back,
+`./uninstall.sh` the program as well.
+
+**Everything is off after an install.** The tool arrives on the phone; what
+the phone looks like stays the user's decision, one switch at a time.
 
 The clock is **UPower**: it polls the battery for the whole phone anyway, so
 its signal is subscribed to rather than polling ourselves. A slow timer
 (120 s) runs underneath as a net.
+
+**What it costs**, measured on the device with `/proc/<pid>/stat` over two
+minutes, twice, with the time in the bar switched on: **0.03 % of one core,
+about 26 s of CPU a day, and no child processes at all.** It was 0.217 % and
+187 s a day until the percentage key was read through `gsettings` on every
+tick — two thirds of everything the daemon spent went on forking. Both
+gsettings keys are read in-process now. On a phone that never suspends this
+is the number that matters, and `cutime`/`cstime` in `/proc/<pid>/stat` is
+the cheapest way to see it, because it separates a process's own cost from
+what it forks.
 
 ## Tests
 
@@ -204,5 +294,7 @@ tests/run-tests.sh      # no display, no battery, no root - NEVER with sudo
 tests/coverage.sh
 ```
 
-159 tests, 88.0 % of the lines. What is missing is the D-Bus wiring of the
-daemon — that is proven on the device, not simulated (FINDINGS.md).
+216 tests, 78 % of the lines. What is missing is the D-Bus wiring of the
+daemon and the strip itself — both are proven on the device with `grim` and
+`WAYLAND_DEBUG`, not simulated (FINDINGS.md §8, §11). The decision behind the
+strip is lifted out of the loop so it can be tested: `strip_action`.

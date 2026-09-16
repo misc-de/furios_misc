@@ -54,7 +54,7 @@ class Base(unittest.TestCase):
         # deleted the icons of the running phone during a test run and left a
         # broken icon in the bar (15.9.2026).
         self.old_paths = (b.SYSFS, b.CONFIG, b.THEMES, list(b.THEME_DIRS),
-                    b.ICON_BASE, b.ICON_SOURCE, list(b.ICON_DIRS))
+                    b.ICON_BASE, b.ICON_SOURCE, list(b.ICON_DIRS), b.STATE)
         self.alter_pfad = os.environ["PATH"]
         self.icon_root = os.path.join(self.tmp, "icons")
         b.ICON_BASE = self.icon_root
@@ -63,6 +63,15 @@ class Base(unittest.TestCase):
         with open(self.icon_setting, "w") as fh:
             fh.write("Adwaita\n")
         os.environ["FURIOS_BATTERY_ICON_SETTING_FILE"] = self.icon_setting
+        # The percentage key and what we remember about it. Both isolated for
+        # the same reason as the icon directory above: without this a test
+        # run reaches gsettings on the phone it runs on and takes the
+        # percentage out of the real top bar.
+        self.percent_setting = os.path.join(self.tmp, "show-percentage")
+        with open(self.percent_setting, "w") as fh:
+            fh.write("true\n")
+        os.environ["FURIOS_BATTERY_PERCENT_SETTING_FILE"] = self.percent_setting
+        b.STATE = os.path.join(self.tmp, "state.json")
         b.SYSFS = self.sysfs
         b.CONFIG = os.path.join(self.tmp, "config.json")
         b.THEMES = self.themes
@@ -73,11 +82,24 @@ class Base(unittest.TestCase):
         # depend on what this phone's UPower is saying at the time.
         os.environ["FURIOS_BATTERY_ICON"] = ""
 
+    def cfg_on(self, **rest):
+        """A config with the colours switched on.
+
+        Needed because nothing is on after an install: the defaults are all
+        off, and a test of the colour machinery has to say so out loud
+        rather than inherit it. See the test that pins the defaults.
+        """
+        cfg = dict(b.DEFAULTS, charging=True, discharging=True, level=True)
+        cfg.update(rest)
+        return cfg
+
     def tearDown(self):
         b.SYSFS, b.CONFIG, b.THEMES = self.old_paths[:3]
         b.THEME_DIRS[:] = self.old_paths[3]
         b.ICON_BASE, b.ICON_SOURCE = self.old_paths[4], self.old_paths[5]
         b.ICON_DIRS[:] = self.old_paths[6]
+        b.STATE = self.old_paths[7]
+        os.environ.pop("FURIOS_BATTERY_PERCENT_SETTING_FILE", None)
         os.environ.pop("FURIOS_BATTERY_ICON_SETTING_FILE", None)
         os.environ.pop("FURIOS_BATTERY_SETTING_FILE", None)
         os.environ.pop("FURIOS_BATTERY_ICON", None)
@@ -88,11 +110,24 @@ class Base(unittest.TestCase):
             os.rmdir(folder)
 
     # -- Helfer ------------------------------------------------------------
-    def battery(self, status="Charging", ampere=1.2, volt=4.3, percent=80):
+    def battery(self, status="Charging", ampere=1.2, volt=4.3, percent=80,
+                charge=None, full=None, avg=None):
+        """The four attributes the colour needs, plus the three the time
+        needs.
+
+        The last three only when a test asks for them: a driver that does
+        not publish them is a real case (this one has no charge_now), and
+        every test written before them has to go on describing a phone
+        where the time cannot be said.
+        """
         values = {"status": status,
                  "current_now": str(int(ampere * 1e6)),
                  "voltage_now": str(int(volt * 1e6)),
                  "capacity": str(percent)}
+        for name, wert in (("charge_counter", charge), ("charge_full", full),
+                           ("current_avg", avg)):
+            if wert is not None:
+                values[name] = str(int(wert))
         for name, value in values.items():
             with open(os.path.join(self.sysfs, name), "w") as fh:
                 fh.write(value + "\n")
@@ -189,7 +224,7 @@ class Reading(Base):
 class Thresholds(Base):
     def setUp(self):
         super().setUp()
-        self.cfg = dict(b.DEFAULTS)
+        self.cfg = self.cfg_on()
 
     def test_charging_has_three_steps(self):
         self.assertEqual(b.bucket_for(8.0, True, self.cfg), "green")
@@ -253,7 +288,8 @@ class Thresholds(Base):
     def test_on_battery_only_when_wanted(self):
         self.battery(status="Discharging", ampere=1.5, volt=3.9)   # 5.85 W
         reading = b.read_battery()
-        self.assertIsNone(b.wanted_bucket(reading, self.cfg))
+        self.assertIsNone(
+            b.wanted_bucket(reading, dict(self.cfg, discharging=False)))
         self.assertEqual(b.wanted_bucket(reading, dict(self.cfg, discharging=True)),
                          "red")
 
@@ -282,7 +318,7 @@ class FillLevel(Base):
 
     def setUp(self):
         super().setUp()
-        self.cfg = dict(b.DEFAULTS)
+        self.cfg = self.cfg_on()
 
     def test_three_bands(self):
         self.assertIsNone(b.level_for(85, self.cfg))
@@ -388,7 +424,7 @@ class IconFamilies(Base):
         not ask."""
         self.battery(status="Charging", ampere=0.2, volt=4.3)
         reading = b.read_battery()
-        cfg = dict(b.DEFAULTS)
+        cfg = self.cfg_on()
         self.assertEqual(b.wanted_bucket(reading, cfg), "red")
         self.assertEqual(
             b.wanted_bucket(reading, cfg, icon="battery-level-90-charging-symbolic"),
@@ -404,7 +440,7 @@ class IconFamilies(Base):
     def test_the_level_stays_untouched_by_that(self):
         """How full it is, both sources agree on."""
         self.battery(status="Charging", ampere=0.2, volt=4.3, percent=9)
-        self.assertEqual(b.wanted_level(b.read_battery(), dict(b.DEFAULTS)),
+        self.assertEqual(b.wanted_level(b.read_battery(), self.cfg_on()),
                          "red")
 
     def test_the_name_phosh_draws(self):
@@ -911,6 +947,10 @@ class Commands(Base):
     def test_status_json(self):
         self.battery(ampere=1.9, volt=4.2)
         self.make_theme("base")
+        # Nothing colours anything until it is switched on, so a status run
+        # against a fresh install would report "none" and say nothing about
+        # the thresholds this test is here for.
+        b.save_config(self.cfg_on())
         rc, out, _ = self.run_cmd("status", "--json")
         daten = json.loads(out)
         self.assertEqual(rc, 0)
@@ -1185,6 +1225,10 @@ class TheLoop(Base):
         super().setUp()
         self.make_theme("base")
         self.battery(ampere=1.2, volt=4.3)          # 5.16 W -> amber
+        # The daemon reads the config, and after an install that config says
+        # "colour nothing". Every test below is about what happens once
+        # somebody has switched the colours on.
+        b.save_config(self.cfg_on())
         self.d = b.Daemon(current="base")
 
     def test_the_first_colour_comes_at_once(self):
@@ -1320,8 +1364,10 @@ class TheLoop(Base):
         """The app writes the config file; a daemon that read it once would
         make its switch look broken until the next boot."""
         self.battery(status="Discharging", ampere=1.6, volt=3.9)   # 6.24 W
+        b.save_config(self.cfg_on(discharging=False))
+        self.d.reload()
         self.assertFalse(self.d.tick(now=1000))     # discharging is off
-        b.save_config(dict(b.DEFAULTS, discharging=True))
+        b.save_config(self.cfg_on(discharging=True))
         self.assertTrue(self.d.tick(now=1100))
         self.assertEqual(self.d.showing[0], "red")
 
@@ -1479,6 +1525,502 @@ class TheLoop(Base):
         d = b.Daemon(setting=Stur(self.setting), current="base")
         self.assertFalse(d.tick(now=1000))
         self.assertIsNone(d.showing[0])
+
+
+class NothingIsOnAfterAnInstall(Base):
+    """The rule for every option this project installs.
+
+    An install puts a tool on the phone. It does not decide that the phone
+    should now look different - that is the user's, one switch at a time.
+    Pinned here because it is a default, and a default is exactly the kind
+    of thing that drifts back the next time somebody thinks "this is the
+    point of the tool, surely it should be on".
+    """
+
+    def test_every_option_is_off(self):
+        for key in b.SCHALTER:
+            self.assertIs(b.DEFAULTS[key], False, key)
+
+    def test_a_fresh_config_colours_nothing(self):
+        self.battery(ampere=1.9, volt=4.2)          # would be green
+        cfg = b.load_config()
+        self.assertIsNone(b.wanted_bucket(b.read_battery(), cfg))
+        self.assertIsNone(b.wanted_level(b.read_battery(), cfg))
+
+    def test_a_fresh_daemon_writes_no_theme(self):
+        self.make_theme("base")
+        self.battery(ampere=1.9, volt=4.2)
+        daemon = b.Daemon(current="base")
+        self.assertFalse(daemon.tick(now=1000))
+        self.assertEqual(b.Setting().get(), "base")
+
+
+class TheTimeLeft(Base):
+    """A charge divided by a current, and everything that can go wrong
+    with that."""
+
+    # 2.0976 Ah of 4.37 Ah - the phone at 48 %, read on 16.9.2026.
+    HAVE, FULL = 2097600, 4370000
+
+    def test_discharging_is_what_is_in_it_over_what_goes_out(self):
+        self.battery(status="Discharging", ampere=0.3782,
+                     charge=self.HAVE, full=self.FULL)
+        hours = b.runtime_hours(b.read_battery())
+        self.assertAlmostEqual(hours, 5.546, places=2)
+        self.assertEqual(b.format_runtime(hours), "05:33")
+
+    def test_charging_is_what_is_missing_over_what_goes_in(self):
+        self.battery(status="Charging", ampere=1.0,
+                     charge=self.HAVE, full=self.FULL)
+        self.assertAlmostEqual(b.runtime_hours(b.read_battery()), 2.2724,
+                               places=3)
+
+    def test_a_cable_that_moves_nothing_has_no_time(self):
+        """"Full" and "Not charging" are not a direction, so there is
+        nothing to divide into."""
+        for status in ("Full", "Not charging"):
+            self.battery(status=status, ampere=0.4,
+                         charge=self.HAVE, full=self.FULL)
+            self.assertIsNone(b.runtime_hours(b.read_battery()), status)
+
+    def test_a_driver_without_the_attributes_says_nothing(self):
+        """No charge_counter, no time - and no guess from the percentage
+        either. capacity is a percentage of a capacity nobody stated."""
+        self.battery(status="Discharging", ampere=0.4)
+        self.assertIsNone(b.runtime_hours(b.read_battery()))
+
+    def test_zero_is_not_a_reading(self):
+        """An unpopulated attribute reads as 0 on this driver. Dividing by
+        it, or into it, would be an hours figure invented out of nothing."""
+        self.battery(status="Discharging", ampere=0.4, charge=0, full=self.FULL)
+        self.assertIsNone(b.runtime_hours(b.read_battery()))
+        self.battery(status="Discharging", ampere=0.0,
+                     charge=self.HAVE, full=self.FULL)
+        self.assertIsNone(b.runtime_hours(b.read_battery()))
+
+    def test_an_absurd_time_is_no_time(self):
+        """A current of almost nothing divided into a full battery is not a
+        runtime, it is a measurement that failed."""
+        self.battery(status="Discharging", ampere=0.000001,
+                     charge=self.HAVE, full=self.FULL)
+        self.assertIsNone(b.runtime_hours(b.read_battery()))
+
+    def test_the_clock_format(self):
+        self.assertEqual(b.format_runtime(0.0), "00:00")
+        self.assertEqual(b.format_runtime(1.5), "01:30")
+        self.assertEqual(b.format_runtime(12.25), "12:15")
+        self.assertIsNone(b.format_runtime(None))
+
+    def test_the_spot_is_never_empty(self):
+        """What replaced the percentage falls back to the percentage. A
+        blank where a number used to be reads as a fault, and a full
+        battery is not a fault."""
+        self.assertEqual(b.runtime_label({"percent": 48.0}, "05:33"), "05:33")
+        self.assertEqual(b.runtime_label({"percent": 48.0}, None), "48%")
+        self.assertEqual(b.runtime_label({"percent": None}, None), "")
+        self.assertEqual(b.runtime_label(None, None), "")
+
+
+class TheTimeInTheLoop(Base):
+    """The daemon's half: smoothing, and which samples count."""
+
+    HAVE, FULL = 2097600, 4370000
+
+    def setUp(self):
+        super().setUp()
+        self.make_theme("base")
+        b.save_config(self.cfg_on(runtime=True))
+        self.d = b.Daemon(current="base")
+
+    def test_the_gauge_average_is_preferred_to_the_instant(self):
+        """Measured within one second on 16.9.2026: current_now 0.603 A,
+        current_avg 0.378 A, same steady discharge - 03:29 against 05:33.
+        The calm one is the one to put in the bar."""
+        self.battery(status="Discharging", ampere=0.6034, avg=378200,
+                     charge=self.HAVE, full=self.FULL)
+        self.d.tick(now=1000)
+        self.assertEqual(self.d.runtime(), "05:33")
+
+    def test_without_an_average_the_instant_is_used(self):
+        self.battery(status="Discharging", ampere=0.3782,
+                     charge=self.HAVE, full=self.FULL)
+        self.d.tick(now=1000)
+        self.assertEqual(self.d.runtime(), "05:33")
+
+    def test_the_median_smooths_a_spike(self):
+        """One reading of half an amp extra must not take two hours off the
+        estimate."""
+        for when, strom in ((1000, 0.38), (1010, 0.38), (1020, 0.9),
+                            (1030, 0.38), (1040, 0.38)):
+            self.battery(status="Discharging", ampere=strom,
+                         charge=self.HAVE, full=self.FULL)
+            self.d.tick(now=when)
+        self.assertEqual(self.d.runtime(), "05:31")
+
+    def test_a_direction_change_does_not_average_across_it(self):
+        """A cable pulled halfway through the window would otherwise mix a
+        charge current into a discharge and produce a time that was never
+        true of either."""
+        for when in (1000, 1010, 1020):
+            self.battery(status="Charging", ampere=2.0,
+                         charge=self.HAVE, full=self.FULL)
+            self.d.tick(now=when)
+        self.battery(status="Discharging", ampere=0.3782,
+                     charge=self.HAVE, full=self.FULL)
+        self.d.tick(now=1030)
+        self.assertEqual(self.d.runtime(), "05:33")
+
+    def test_an_old_sample_falls_out_of_the_window(self):
+        self.battery(status="Discharging", ampere=2.0,
+                     charge=self.HAVE, full=self.FULL)
+        self.d.tick(now=1000)
+        self.battery(status="Discharging", ampere=0.3782,
+                     charge=self.HAVE, full=self.FULL)
+        spaeter = 1000 + b.DEFAULTS["runtime_window_s"] + 1
+        self.d.tick(now=spaeter)
+        self.assertEqual(self.d.runtime(), "05:33")
+
+    def test_an_unreadable_battery_leaves_no_time(self):
+        """No files in the battery directory at all - this setUp never wrote
+        any. Nothing to read is nothing to say, not a zero."""
+        self.d.tick(now=1000)
+        self.assertIsNone(self.d.runtime())
+        self.assertIsNone(self.d.last_reading)
+
+
+class ThePercentage(Base):
+    """Holding phosh's percentage slot, and giving it back.
+
+    Note which way round this goes. The time stands exactly where the
+    percentage stood, and that place only exists while phosh is still
+    laying the percentage out - so the setting has to be ON, and the text
+    is emptied by the theme instead. Switching the key off frees the space
+    and phosh moves the battery icon into it, which was measured: the icon
+    goes from 613..631 to 666..683 on this 720 px screen, leaving nothing
+    to its right but 36 px of phosh's own padding.
+    """
+
+    def percentage(self):
+        return b.percent_setting().get()
+
+    def test_claiming_the_space_remembers_what_the_setting_was(self):
+        b.percent_setting().set("false")
+        self.assertTrue(b.claim_percentage_space())
+        self.assertEqual(self.percentage(), "true")
+        self.assertEqual(b.load_state()["percent_was"], "false")
+
+    def test_the_usual_case_changes_nothing(self):
+        """On is the default, so most phones see no change at all - the
+        setting is already what we need."""
+        self.assertTrue(b.claim_percentage_space())
+        self.assertEqual(self.percentage(), "true")
+
+    def test_releasing_puts_back_what_was_found(self):
+        b.percent_setting().set("false")
+        b.claim_percentage_space()
+        self.assertTrue(b.release_percentage_space())
+        self.assertEqual(self.percentage(), "false")
+        self.assertNotIn("percent_was", b.load_state())
+
+    def test_somebody_who_had_it_on_keeps_it_on(self):
+        b.claim_percentage_space()
+        b.release_percentage_space()
+        self.assertEqual(self.percentage(), "true")
+
+    def test_releasing_twice_is_harmless(self):
+        """It is called from three places that can all happen: the daemon on
+        SIGTERM, `reset` from ExecStopPost after a kill -9, and `restore`
+        from the app."""
+        b.percent_setting().set("false")
+        b.claim_percentage_space()
+        b.release_percentage_space()
+        b.percent_setting().set("true")             # somebody else, later
+        b.release_percentage_space()
+        self.assertEqual(self.percentage(), "true")
+
+    def test_a_restart_while_we_hold_it_does_not_forget(self):
+        """The daemon comes back, sees "true" - which is our own doing - and
+        must not write that down as what the user had."""
+        b.percent_setting().set("false")
+        b.claim_percentage_space()
+        b.claim_percentage_space()
+        b.release_percentage_space()
+        self.assertEqual(self.percentage(), "false")
+
+    def test_switching_it_off_by_hand_outranks_us(self):
+        b.percent_setting().set("false")
+        b.claim_percentage_space()
+        b.percent_setting().set("false")            # the user, by hand
+        b.release_percentage_space()
+        self.assertEqual(self.percentage(), "false")
+
+    def test_reset_puts_it_back(self):
+        """This is what ExecStopPost runs, so it is also the answer to a
+        kill -9."""
+        b.percent_setting().set("false")
+        b.claim_percentage_space()
+        self.assertEqual(b.cmd_reset([]), 0)
+        self.assertEqual(self.percentage(), "false")
+
+    def test_restore_leaves_no_state_behind(self):
+        b.claim_percentage_space()
+        b.save_config(self.cfg_on(runtime=True))
+        b.cmd_restore([])
+        self.assertFalse(os.path.exists(b.STATE))
+        self.assertFalse(os.path.exists(b.CONFIG))
+
+    def test_it_is_the_same_key_the_settings_app_shows(self):
+        """phosh-mobile-settings has this switch under Top Bar ("Show
+        battery percentage"), bound to the same gsettings key. Pinned so
+        nobody moves ours to a private key of its own, where the phone would
+        say one thing and its settings another."""
+        self.assertEqual(
+            "org.gnome.desktop.interface show-battery-percentage",
+            b.PERCENT_SETTING)
+
+    def test_reading_whether_somebody_switched_it_off(self):
+        self.assertFalse(b.percentage_switched_off())
+        b.percent_setting().set("false")
+        self.assertTrue(b.percentage_switched_off())
+
+    def test_the_option_is_a_switch_like_the_others(self):
+        self.assertEqual(self.run_cmd("config", "runtime", "on")[0], 0)
+        self.assertIs(b.load_config()["runtime"], True)
+        self.assertEqual(self.run_cmd("config", "runtime", "off")[0], 0)
+        self.assertIs(b.load_config()["runtime"], False)
+        self.assertEqual(self.run_cmd("config", "runtime", "maybe")[0], 2)
+
+
+class EmptyingTheLabel(Base):
+    """The rule that empties phosh's percentage without freeing its place.
+
+    A theme is the only thing on this phone that reaches into the running
+    shell, which is why a stylesheet carries something that is not a colour.
+    """
+
+    def test_the_rule_is_in_the_stylesheet_when_asked_for(self):
+        rule = b.css_rule(percent=True)
+        self.assertIn("phosh-battery-info label", rule)
+        self.assertIn("color: transparent", rule)
+
+    def test_all_three_declarations_are_there(self):
+        """Each does a different job: the text goes, its own width stops
+        deciding the slot, and the slot gets a width of its own. Drop the
+        middle one and 9 %, 48 % and 100 % reserve three different widths,
+        which moves the icons about under our clock; drop the last and the
+        slot is whatever the percentage happened to need.
+
+        The width itself is not pinned here - it is measured against the
+        font on the device and changes with it. What must not go missing is
+        that all three are said."""
+        rule = b.css_rule(percent=True)
+        for declaration in ("color: transparent", "font-size: 1px",
+                            "min-width:"):
+            self.assertIn(declaration, rule, declaration)
+
+    def test_without_it_the_stylesheet_is_only_colour(self):
+        self.assertNotIn("phosh-battery-info label",
+                         b.css_rule("green", "amber"))
+
+    def test_a_stylesheet_of_nothing_but_the_blanking(self):
+        """The case that has no colour at all: only the time is switched on.
+        There has to be a theme of ours even then, or there is nothing to
+        carry the rule."""
+        rule = b.css_rule(percent=True)
+        self.assertTrue(rule)
+        self.assertNotIn("-gtk-icon-palette", rule)
+
+    def test_the_name_says_which_it_is(self):
+        self.assertTrue(b.theme_name("base", percent=True).endswith("-p"))
+        self.assertFalse(b.theme_name("base").endswith("-p"))
+        self.assertTrue(b.blanks_percentage(b.theme_name("base", "green",
+                                                         percent=True)))
+        self.assertFalse(b.blanks_percentage(b.theme_name("base", "green")))
+        self.assertFalse(b.blanks_percentage("adw-gtk3"))
+
+    def test_the_users_own_theme_is_still_read_off_the_name(self):
+        """base_name has to see through the new suffix as well, or a restart
+        would build our theme on top of our theme."""
+        self.assertEqual(
+            "adw-gtk3",
+            b.base_name(b.theme_name("adw-gtk3", "green", "amber", "c", True)))
+
+    def test_it_is_written_and_switched_to_without_a_colour(self):
+        self.make_theme("base")
+        name = b.write_theme("base", percent=True)
+        self.assertTrue(name.endswith("-p"))
+        with open(os.path.join(self.themes, name, "gtk-3.0", "gtk.css")) as fh:
+            self.assertIn("phosh-battery-info label", fh.read())
+
+    def test_the_daemon_leaves_the_users_theme_when_nothing_is_wanted(self):
+        self.make_theme("base")
+        self.battery(status="Full", ampere=0.0, volt=4.3)
+        daemon = b.Daemon(current="base")
+        daemon.tick(now=1000)
+        self.assertEqual(b.Setting().get(), "base")
+
+    def test_the_daemon_switches_to_ours_for_the_blanking_alone(self):
+        """No colour to show and still a theme of ours, because the rule has
+        to live somewhere."""
+        self.make_theme("base")
+        self.battery(status="Full", ampere=0.0, volt=4.3)
+        daemon = b.Daemon(current="base")
+        daemon.blank_percent = True
+        self.assertTrue(daemon.apply((None, None), now=1000))
+        self.assertTrue(b.blanks_percentage(b.Setting().get()))
+        self.assertTrue(daemon.blank_showing)
+
+    def test_the_dwell_does_not_hold_back_the_blanking(self):
+        """45 seconds is there so a wobbling colour does not restyle every
+        app. Somebody throwing a switch is not a wobble - and waiting would
+        leave the percentage and the clock in the bar side by side."""
+        self.make_theme("base")
+        b.save_config(self.cfg_on())
+        self.battery(ampere=1.2, volt=4.3)
+        daemon = b.Daemon(current="base")
+        daemon.tick(now=1000)
+        daemon.blank_percent = True
+        self.assertTrue(daemon.apply(daemon.showing, now=1005))
+        self.assertTrue(b.blanks_percentage(b.Setting().get()))
+
+    def test_and_the_colour_still_waits_out_the_dwell(self):
+        self.make_theme("base")
+        b.save_config(self.cfg_on())
+        self.battery(ampere=1.2, volt=4.3)          # amber
+        daemon = b.Daemon(current="base")
+        daemon.tick(now=1000)
+        self.battery(ampere=3.0, volt=4.3)          # green
+        self.assertFalse(daemon.tick(now=1010))
+        self.assertEqual(daemon.showing[0], "amber")
+
+    def test_a_theme_of_ours_from_an_earlier_run_is_seen_through(self):
+        self.make_theme("base")
+        daemon = b.Daemon(current=b.theme_name("base", "green", percent=True))
+        self.assertEqual("base", daemon.base)
+
+
+class TwoQuestionsTwoSwitches(Base):
+    """"How long does it last" and "how long until full" are not the same
+    question, so they are not the same switch. What is not asked for falls
+    back to the percentage, not to an empty spot."""
+
+    HAVE, FULL = 2097600, 4370000
+
+    def battery_on(self, status, **rest):
+        self.battery(status=status, ampere=0.4, charge=self.HAVE,
+                     full=self.FULL, **rest)
+        return b.read_battery()
+
+    def test_on_battery_the_runtime_switch_decides(self):
+        reading = self.battery_on("Discharging")
+        self.assertTrue(b.time_wanted(reading, self.cfg_on(runtime=True)))
+        self.assertFalse(b.time_wanted(reading, self.cfg_on(runtime=False)))
+
+    def test_on_a_cable_the_charge_switch_decides(self):
+        reading = self.battery_on("Charging")
+        self.assertTrue(b.time_wanted(reading, self.cfg_on(charge_time=True)))
+        self.assertFalse(b.time_wanted(reading, self.cfg_on(charge_time=False)))
+
+    def test_neither_switch_answers_for_the_other(self):
+        """The whole point of a second switch: somebody who wants to know how
+        long the phone lasts has not thereby asked how long it charges."""
+        cfg = self.cfg_on(runtime=True, charge_time=False)
+        self.assertTrue(b.time_wanted(self.battery_on("Discharging"), cfg))
+        self.assertFalse(b.time_wanted(self.battery_on("Charging"), cfg))
+        cfg = self.cfg_on(runtime=False, charge_time=True)
+        self.assertFalse(b.time_wanted(self.battery_on("Discharging"), cfg))
+        self.assertTrue(b.time_wanted(self.battery_on("Charging"), cfg))
+
+    def test_a_cable_that_moves_nothing_asks_neither(self):
+        cfg = self.cfg_on(runtime=True, charge_time=True)
+        for status in ("Full", "Not charging"):
+            self.assertFalse(b.time_wanted(self.battery_on(status), cfg),
+                             status)
+
+    def test_what_is_not_asked_for_shows_the_percentage(self):
+        """Not an empty spot: the strip stands where a number stood, and a
+        blank there reads as a fault."""
+        self.battery(status="Charging", ampere=0.4, percent=48,
+                     charge=self.HAVE, full=self.FULL)
+        b.save_config(self.cfg_on(runtime=True, charge_time=False))
+        self.make_theme("base")
+        daemon = b.Daemon(current="base")
+        daemon.tick(now=1000)
+        self.assertIsNone(daemon.runtime())
+        self.assertEqual("48%",
+                         b.runtime_label(daemon.last_reading, daemon.runtime()))
+
+    def test_and_what_is_asked_for_shows_the_time(self):
+        self.battery(status="Charging", ampere=1.0, percent=48,
+                     charge=self.HAVE, full=self.FULL)
+        b.save_config(self.cfg_on(runtime=False, charge_time=True))
+        self.make_theme("base")
+        daemon = b.Daemon(current="base")
+        daemon.tick(now=1000)
+        self.assertEqual("02:16", daemon.runtime())
+
+    def test_either_switch_puts_the_strip_up(self):
+        """It does not come and go with the cable. Every coming and going
+        would restyle all GTK3 apps, and the bar would rearrange itself the
+        moment somebody plugs in."""
+        self.assertTrue(b.strip_wanted(self.cfg_on(runtime=True)))
+        self.assertTrue(b.strip_wanted(self.cfg_on(charge_time=True)))
+        self.assertTrue(b.strip_wanted(
+            self.cfg_on(runtime=True, charge_time=True)))
+        self.assertFalse(b.strip_wanted(
+            self.cfg_on(runtime=False, charge_time=False)))
+
+    def test_the_charge_switch_is_off_after_an_install(self):
+        self.assertIs(b.DEFAULTS["charge_time"], False)
+
+    def test_it_is_a_switch_like_the_others(self):
+        self.assertEqual(self.run_cmd("config", "charge-time", "on")[0], 0)
+        self.assertIs(b.load_config()["charge_time"], True)
+        self.assertEqual(self.run_cmd("config", "charge_time", "off")[0], 0)
+        self.assertIs(b.load_config()["charge_time"], False)
+
+
+class WhoWinsOverThePercentage(Base):
+    """The strip stands in phosh's percentage slot, so it lives on that
+    setting being on.
+
+    Its own decision function because in the daemon it sits behind GTK and
+    a compositor, and this is the part worth being able to check: what
+    happens when somebody reaches for the switch in phosh-mobile-settings
+    while our strip is up.
+    """
+
+    def test_off_means_nothing_is_drawn(self):
+        self.assertEqual(b.strip_action(False, False, False, False), "idle")
+
+    def test_switching_the_option_on_puts_it_up(self):
+        self.assertEqual(b.strip_action(True, False, False, False), "up")
+
+    def test_while_it_is_up_it_only_gets_the_time(self):
+        self.assertEqual(b.strip_action(True, True, False, False), "hold")
+
+    def test_switching_the_option_off_takes_it_down(self):
+        self.assertEqual(b.strip_action(False, True, False, False), "down")
+
+    def test_switching_the_percentage_off_takes_our_place_with_it(self):
+        """Off, phosh stops laying the percentage out and the battery icon
+        moves into the freed space - measured, 613..631 becomes 666..683.
+        Our clock sits at a fixed distance from the edge, so carrying on
+        would draw it on top of the icon. That switch is a decision, so we
+        stand down."""
+        self.assertEqual(b.strip_action(True, True, True, False), "yield")
+
+    def test_and_we_do_not_claim_it_again_next_tick(self):
+        """The whole point of remembering: without it the next tick would
+        switch the percentage back on, and the switch in the settings app
+        would appear not to work."""
+        self.assertEqual(b.strip_action(True, False, False, True), "wait")
+
+    def test_the_option_going_off_clears_the_standing_down(self):
+        """Otherwise switching it off and on again would be a switch that
+        does nothing for the rest of the session."""
+        self.assertEqual(b.strip_action(False, False, False, True), "reset")
+        self.assertEqual(b.strip_action(True, False, False, False), "up")
 
 
 if __name__ == "__main__":

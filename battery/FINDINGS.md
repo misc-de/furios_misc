@@ -305,3 +305,92 @@ Plus the warning from a sibling project, which is built in here: a
 subscription whose connection is collected expires **silently** — no error,
 no journal entry, a healthy-looking service that never measures again. The
 proxy is therefore held, and the 120 s timer runs underneath as a net.
+
+## 9 · The time left: where a number can go in phosh's bar
+
+Measured on 16.9.2026 on this 720 px screen, with `grim` and a script that
+reads the ink positions out of the screenshot. Everything below is in screen
+pixels, and every number was stepped and re-read rather than derived.
+
+**There is no room to the right of the battery icon.** Switching the
+percentage off with `org.gnome.desktop.interface show-battery-percentage`
+frees its place and phosh moves the icons straight into it:
+
+| | location | battery | percentage | padding |
+|---|---|---|---|---|
+| percentage on | 577–595 | 613–631 | 644–686 | 33 px |
+| percentage off | 630–647 | 666–683 | — | 36 px |
+
+So the place only exists while phosh is still laying the percentage out.
+That is why the key stays **on** and the text is emptied by the theme
+instead — and why this is the one stylesheet rule in this project that is
+not a colour.
+
+**The rule needs all three declarations.** `color: transparent` alone leaves
+the slot exactly as wide as the percentage's own text, which means 9 %, 48 %
+and 100 % reserve three different widths and the icons walk about under the
+clock as the battery empties. `font-size: 1px` takes that decision away from
+the text, and `min-width` then sets it. The value is not derivable: at
+`min-width: 28px` the icons sat at 579/615 and at 30px at 576/612, so 29
+reproduced the percentage's own layout — and once the font grew to 16 px the
+right value was 41, because the slot has to hold **our** text, not phosh's.
+
+**The font is phosh's own**, taken from its stylesheet rather than guessed:
+`gresource extract /usr/libexec/phosh /mobi/phosh/stylesheet/common.css`
+gives `font-size: 13px; font-weight: 800; font-feature-settings: "tnum"`
+for `.indicators`. `tnum` is the one that matters — with proportional digits
+a clock changes width at every digit and shifts under itself once a minute.
+The size is ours at 16 px (phosh's clock size): 13 px was too small to read.
+
+**The lock screen cannot be drawn on.** phoc speaks `zwlr_layer_shell_v1`
+and has no session-lock protocol, so phosh's lock screen is an ordinary
+layer surface on the same OVERLAY layer we use, and within a layer the
+newest is on top — measured directly with two strips side by side, the one
+started second covers the first. The lock screen is created when the phone
+is locked, i.e. after us, so it covers us.
+
+Two ways out were measured and both failed. Rebuilding the strip on the lock
+signal leaves **no strip at all**: locking turns the panel off in the same
+breath, and a layer surface created against an output that is off is never
+configured. `PowerSaveMode` from `org.gnome.Mutter.DisplayConfig` looked like
+the signal for "the screen came back on" and is not — it was emitted on one
+lock cycle and not on the next. What is left is to lift the blanking for as
+long as the phone is locked, so the lock screen looks exactly as it did
+before the option existed.
+
+`org.gnome.ScreenSaver.ActiveChanged` is dependable, and `SetActive` both
+locks **and unlocks** this session without a PIN — which is how the lock
+cycles above were driven. `loginctl lock-session` cannot: it answers
+"Session does not support lock screen".
+
+## 10 · A fork per reading is two thirds of the cost
+
+The percentage key was read through `gsettings` on every tick, the way
+`battctl config` reads it. Measured with `/proc/<pid>/stat`: the daemon used
+0.217 % of a core, and **0.29 s of every 60 was child processes** — two
+thirds of everything it spent, for one `gsettings get` per reading.
+
+The theme key had been given a `Gio.Settings` of its own long ago for
+exactly this reason. The new key went in through the front door and undid
+it. Both are read in-process now.
+
+The lesson is not about this key: anything called once per reading in a
+daemon that never suspends is measured before it is believed, and the
+cheapest way to measure it is the `cutime`/`cstime` fields of
+`/proc/<pid>/stat`, which separate a process's own cost from what it forks.
+
+## 11 · What is still not checked
+
+Beside the D-Bus wiring (§8): the strip itself. Whether a layer surface comes
+up, where its ink lands and whether it takes touch are all questions for a
+compositor, and the answers here came from `grim` and `WAYLAND_DEBUG`, not
+from a test. The one decision that could be lifted out of it is, and has
+seven: `strip_action` says what the strip should do this tick, and the three
+cases worth getting right — the percentage switched off by hand, not
+claiming it back on the next tick, and a switch off and on again clearing
+that — are pinned there.
+
+The liveness check next to it (`strip.alive`, so a compositor restart does
+not leave the daemon holding a dead window) is not: it is one line in the
+loop, and simulating a compositor going away would prove nothing about this
+one.
