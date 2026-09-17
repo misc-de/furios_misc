@@ -54,7 +54,8 @@ class Base(unittest.TestCase):
         # deleted the icons of the running phone during a test run and left a
         # broken icon in the bar (15.9.2026).
         self.old_paths = (b.SYSFS, b.CONFIG, b.THEMES, list(b.THEME_DIRS),
-                    b.ICON_BASE, b.ICON_SOURCE, list(b.ICON_DIRS), b.STATE)
+                    b.ICON_BASE, b.ICON_SOURCE, list(b.ICON_DIRS), b.STATE,
+                    b.PLUGIN_STATE, b.PLUGIN_SO_GLOB)
         self.alter_pfad = os.environ["PATH"]
         self.icon_root = os.path.join(self.tmp, "icons")
         b.ICON_BASE = self.icon_root
@@ -71,6 +72,17 @@ class Base(unittest.TestCase):
         with open(self.percent_setting, "w") as fh:
             fh.write("true\n")
         os.environ["FURIOS_BATTERY_PERCENT_SETTING_FILE"] = self.percent_setting
+        # The same for the plugin list, the file the icon in the bar reads
+        # and the place the icon itself would be installed. Learned the hard
+        # way twice now: without this a test run takes the real status icon
+        # out of the real top bar, because cmd_reset puts things back for a
+        # daemon that is not running here.
+        self.plugin_setting = os.path.join(self.tmp, "status-icons")
+        with open(self.plugin_setting, "w") as fh:
+            fh.write("@as []\n")
+        os.environ["FURIOS_BATTERY_PLUGIN_SETTING_FILE"] = self.plugin_setting
+        b.PLUGIN_STATE = os.path.join(self.tmp, "furios-battery-time")
+        b.PLUGIN_SO_GLOB = os.path.join(self.tmp, "plugins", "libphosh-*.so")
         b.STATE = os.path.join(self.tmp, "state.json")
         b.SYSFS = self.sysfs
         b.CONFIG = os.path.join(self.tmp, "config.json")
@@ -104,6 +116,8 @@ class Base(unittest.TestCase):
         b.ICON_BASE, b.ICON_SOURCE = self.old_paths[4], self.old_paths[5]
         b.ICON_DIRS[:] = self.old_paths[6]
         b.STATE = self.old_paths[7]
+        b.PLUGIN_STATE, b.PLUGIN_SO_GLOB = self.old_paths[8], self.old_paths[9]
+        os.environ.pop("FURIOS_BATTERY_PLUGIN_SETTING_FILE", None)
         os.environ.pop("FURIOS_BATTERY_PERCENT_SETTING_FILE", None)
         os.environ.pop("FURIOS_BATTERY_ICON_SETTING_FILE", None)
         os.environ.pop("FURIOS_BATTERY_SETTING_FILE", None)
@@ -2193,6 +2207,167 @@ class ConfigWatch(unittest.TestCase):
         """Nothing there at startup reads as None, and the first write is
         the first time anybody said anything."""
         self.assertTrue(b.is_config_write(self.name(), (1, 10), None))
+
+
+class TheIconInTheBar(Base):
+    """The status icon in phosh's own top bar: the list that loads it, the
+    file it reads, and the question of whether the running shell has it.
+
+    Nothing here draws anything - the widget is C and has its own test next
+    door. This is the daemon's half: what it writes, what it sets, and what
+    it must not touch.
+    """
+
+    def plugin_file(self, when=None):
+        """A plugin where this phone's shell would look for one."""
+        path = os.path.join(self.tmp, "plugins",
+                            "libphosh-plugin-furios-battery-time.so")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            fh.write("not really a plugin\n")
+        if when is not None:
+            os.utime(path, (when, when))
+        return path
+
+    def fake_proc(self, started, comm="phosh", boot=1000000.0):
+        """A /proc with one process in it, started at `started` seconds."""
+        proc = os.path.join(self.tmp, "proc")
+        os.makedirs(os.path.join(proc, "4711"), exist_ok=True)
+        with open(os.path.join(proc, "4711", "comm"), "w") as fh:
+            fh.write(comm + "\n")
+        ticks = int((started - boot) * os.sysconf("SC_CLK_TCK"))
+        # state, then seventeen fields nobody here reads, then starttime.
+        rest = " ".join(["S"] + ["0"] * 18 + [str(ticks)])
+        with open(os.path.join(proc, "4711", "stat"), "w") as fh:
+            fh.write("4711 (%s) %s\n" % (comm, rest))
+        with open(os.path.join(proc, "stat"), "w") as fh:
+            fh.write("cpu  1 2 3\nbtime %d\n" % int(boot))
+        return proc
+
+    def listed(self):
+        return b.plugin_names()
+
+    # --- the list the shell reads -------------------------------------
+
+    def test_switching_it_on_leaves_other_peoples_plugins_alone(self):
+        """The key is not ours. Somebody else's icon in it is somebody
+        else's decision, and a list we simply set would end it."""
+        b.set_plugin_names(["ticket-box", "upcoming-events"])
+        self.assertTrue(b.list_plugin())
+        self.assertEqual(["ticket-box", "upcoming-events",
+                          "furios-battery-time"], self.listed())
+
+    def test_switching_it_off_takes_out_ours_and_nothing_else(self):
+        b.set_plugin_names(["ticket-box", "furios-battery-time", "pomodoro"])
+        self.assertTrue(b.unlist_plugin())
+        self.assertEqual(["ticket-box", "pomodoro"], self.listed())
+
+    def test_saying_it_twice_changes_nothing(self):
+        b.list_plugin()
+        b.list_plugin()
+        self.assertEqual(["furios-battery-time"], self.listed())
+        b.unlist_plugin()
+        b.unlist_plugin()
+        self.assertEqual([], self.listed())
+
+    def test_an_empty_list_is_written_the_way_gsettings_types_it(self):
+        """`[]` alone has no type and gsettings refuses it."""
+        b.list_plugin()
+        b.unlist_plugin()
+        with open(self.plugin_setting) as fh:
+            self.assertEqual("@as []", fh.read().strip())
+
+    def test_a_list_nobody_can_read_is_not_a_reason_to_lose_it(self):
+        """Unreadable reads as empty, and what is written is our own entry
+        - not an entry plus the rubbish that was there."""
+        with open(self.plugin_setting, "w") as fh:
+            fh.write("not a list at all\n")
+        self.assertEqual([], b.plugin_names())
+        b.list_plugin()
+        self.assertEqual(["furios-battery-time"], self.listed())
+
+    # --- the file the widget reads ------------------------------------
+
+    def test_a_time_is_written_whole_or_not_at_all(self):
+        self.assertTrue(b.show_time("04:38"))
+        with open(b.PLUGIN_STATE) as fh:
+            self.assertEqual("04:38\n", fh.read())
+        self.assertFalse(os.path.exists(b.PLUGIN_STATE + ".new"),
+                         "the half-written file was left behind")
+
+    def test_no_time_takes_the_file_away(self):
+        b.show_time("04:38")
+        b.clear_time()
+        self.assertFalse(os.path.exists(b.PLUGIN_STATE))
+
+    def test_clearing_what_is_not_there_is_not_an_error(self):
+        self.assertFalse(b.clear_time())      # said, not raised
+
+    # --- installed is not the same as loaded --------------------------
+
+    def test_nothing_installed_is_no_icon_in_the_bar(self):
+        self.assertIsNone(b.plugin_installed())
+        self.assertFalse(b.plugin_live(proc=self.fake_proc(2000.0)))
+
+    def test_a_shell_that_started_after_it_has_it(self):
+        self.plugin_file(when=1000.0)
+        self.assertTrue(b.plugin_live(proc=self.fake_proc(2000.0)))
+
+    def test_a_shell_that_started_before_it_has_not(self):
+        """The one that looks like a fault and is not: phosh reads its
+        plugin directory when it starts and never again."""
+        self.plugin_file(when=3000.0)
+        self.assertFalse(b.plugin_live(proc=self.fake_proc(2000.0)))
+
+    def test_no_shell_at_all_is_not_a_loaded_plugin(self):
+        self.plugin_file(when=1000.0)
+        self.assertFalse(b.plugin_live(proc=self.fake_proc(2000.0,
+                                                           comm="phoc")))
+
+    def test_a_command_with_spaces_does_not_confuse_the_start_time(self):
+        """The command sits in brackets in /proc/<pid>/stat and may hold
+        spaces and brackets of its own, so the fields after it are counted
+        from the last bracket."""
+        proc = self.fake_proc(2000.0, comm="phosh")
+        with open(os.path.join(proc, "4711", "stat")) as fh:
+            line = fh.read()
+        with open(os.path.join(proc, "4711", "stat"), "w") as fh:
+            fh.write(line.replace("(phosh)", "(ph (osh) x)"))
+        self.assertEqual(2000.0, round(b.process_started(4711, proc)))
+
+    # --- what the status line says ------------------------------------
+
+    def test_it_says_which_way_the_time_is_shown(self):
+        self.plugin_file(when=1000.0)
+        self.assertIn("status icon",
+                      b.time_shown_as(proc=self.fake_proc(2000.0)))
+
+    def test_and_what_to_do_when_it_is_not_installed(self):
+        words = b.time_shown_as(proc=self.fake_proc(2000.0))
+        self.assertIn("strip", words)
+        self.assertIn("Install", words)
+
+    def test_and_that_a_shell_restart_is_all_that_is_missing(self):
+        self.plugin_file(when=3000.0)
+        words = b.time_shown_as(proc=self.fake_proc(2000.0))
+        self.assertIn("restart", words)
+
+    # --- putting things back ------------------------------------------
+
+    def test_reset_takes_the_icon_out_of_the_bar(self):
+        """What ExecStopPost runs. A time from a daemon that is gone goes
+        stale where anybody can read it."""
+        b.list_plugin()
+        b.show_time("04:38")
+        b.cmd_reset([])
+        self.assertEqual([], self.listed())
+        self.assertFalse(os.path.exists(b.PLUGIN_STATE))
+
+    def test_reset_leaves_the_rest_of_the_list_where_it_was(self):
+        b.set_plugin_names(["ticket-box"])
+        b.list_plugin()
+        b.cmd_reset([])
+        self.assertEqual(["ticket-box"], self.listed())
 
 
 if __name__ == "__main__":

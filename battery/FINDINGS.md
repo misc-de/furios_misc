@@ -511,3 +511,55 @@ The liveness check next to it (`strip.alive`, so a compositor restart does
 not leave the daemon holding a dead window) is not: it is one line in the
 loop, and simulating a compositor going away would prove nothing about this
 one.
+
+## 14 · The bar has a place for this, and it is a plugin
+
+Everything in §9 is about getting a number into a place phosh does not offer:
+a stylesheet that empties the percentage and holds its width, a layer surface
+over the bar, a state machine for the percentage being switched off by hand,
+and a lock screen the strip cannot be seen through at all.
+
+phosh has an extension point for exactly this. `phosh-status-icon-widget`
+takes any `GtkWidget`, `mobi.phosh.shell.plugins status-icons` lists the ones
+to load, and the widget is appended to the shell's own indicator box - so it
+is drawn wherever that box is drawn, lock screen included, in the box's font.
+[phosh-battery-time](../phosh-battery-time/) next door is that widget: one C
+file, 150 lines, that reads one file and shows it.
+
+What was measured on 17.9.2026 getting there, because none of it is in the
+documentation:
+
+- **The shell does not cast the widget to anything.** `load_custom_status_icons`
+  in `src/top-panel.c` keeps it as a `GtkWidget *` and appends it. A plain
+  `GtkLabel` subclass is enough; the upstream example derives from
+  `PhoshStatusIcon`, whose header is not shipped outside the phosh tree.
+- **Its plugin directory is a compile-time constant** (`PHOSH_PLUGINS_DIR`),
+  read from `phosh-plugins.pc` as `status_icons_plugins_dir`. There is no
+  directory in the home that is scanned, which is why this one part of the
+  collection needs root to install.
+- **The directory is scanned once**, in `phosh_plugin_loader_constructed`, and
+  never again. Setting the key while the shell is running finds nothing that
+  was installed since it started - the shell says `Custom status-icon
+  'furios-battery-time' not found` once and goes quiet. That is not a fault
+  and it is the state a phone is in between an install and the next reboot,
+  so `battctl status` says so in words, and the daemon keeps using the strip
+  until the shell has the plugin. It asks by comparing the file's mtime with
+  the shell's start time out of `/proc/<pid>/stat`, which is three small
+  reads on a tick that is rare.
+- **A GIO module cache is not the problem.** `gio-querymodules` on that
+  directory segfaults on this phone (the other plugins there resolve phosh's
+  own symbols, which are not there outside the shell), and there is no
+  `giomodule.cache` beside them - GIO scans every `.so` in the directory when
+  none exists, which is what phosh relies on.
+
+The test next door loads the built plugin the way the loader does - register
+the point, scan a directory, ask by name - and then drives the widget through
+the file it reads, including an empty one, one that is too long and one that
+is not UTF-8. It needs a display, because a GTK widget does; it says so and
+skips where there is none.
+
+The daemon's half is ordinary and tested here: the list is read, changed and
+written back so another plugin in it survives, the time is written beside the
+target and renamed so the widget never reads half a line, and `cmd_reset` -
+what `ExecStopPost` runs - takes both away. A time from a daemon that is gone
+would go stale where anybody can read it.

@@ -186,22 +186,46 @@ decides but the **median** of a minute; a threshold has to be crossed by a
 tenth before the colour follows, and every colour stays for at least 45
 seconds.
 
-## The time left, instead of the percentage
+## The time left
 
-`battctl config runtime on` puts how long the battery has left where phosh
-shows the percentage, as `05:33`.
+`battctl config runtime on` puts how long the battery has left in the top
+bar, as `05:33`.
 
 `battctl config charge_time on` does the same for a phone on a cable: how
 long until full. Its own switch, because it is its own question - somebody
 who wants to know how long the phone lasts has not thereby asked how long it
-charges. Whichever is switched off shows the percentage instead.
+charges.
+
+**Where it appears depends on one thing being installed.** With
+[phosh-battery-time](../phosh-battery-time/) it is a status icon in phosh's
+own indicator box: beside the percentage, in the shell's font, on the lock
+screen like everywhere else, and nothing is taken away to make room for it.
+Without it, everything below happens instead - a strip of ours over the bar,
+in the place the percentage is emptied out of, invisible while the phone is
+locked. `battctl status` says which of the two is in use, and what is missing
+if it is the second:
+
+    shown as:     the status icon in phosh's bar
+
+The daemon decides that on every tick rather than once at startup: the shell
+can restart under it, and a plugin installed while it was running changes the
+answer. What it asks is not whether the plugin is installed but whether it is
+older than the running shell - phosh reads its plugin directory when it
+starts and never again, so one put there afterwards is found by nobody until
+the next start.
+
+The rest of this section is the strip: how the time gets into a place phosh
+does not offer, and what that costs. With the status icon installed, none of
+it happens.
 
 It is a charge over a current: `charge_counter` over `current_avg`, median of
 a five-minute window. Not `current_now` — measured within one second on
 16.9.2026 the two said 0.603 A and 0.378 A for the same steady discharge,
 which is 03:29 against 05:33 for the same battery. Where the time cannot be
 said — a full battery, a cable that moves nothing, a driver without the
-attributes — the strip shows the percentage instead. The spot is never empty.
+attributes — nothing is shown: the status icon hides itself, and the strip - which
+stands in the percentage's own place and cannot leave it empty - shows the
+percentage instead.
 
 **How it gets into that spot**, because the obvious way puts it somewhere
 else. Switching the percentage off with its gsettings key frees the space and

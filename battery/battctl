@@ -35,6 +35,8 @@ Nothing here needs root. It reads two files in /sys, writes ~/.themes, and
 sets one gsettings key.
 """
 
+import ast
+import glob
 import hashlib
 import json
 import os
@@ -75,6 +77,36 @@ PERCENT_SETTING = "org.gnome.desktop.interface show-battery-percentage"
 STATE = os.environ.get(
     "FURIOS_BATTERY_STATE",
     os.path.join(os.path.dirname(CONFIG), "state.json"))
+
+# --- the status icon in phosh's own top bar ---------------------------------
+#
+# The second way to show a time, and the better one. The first is a layer
+# surface of ours over the bar (RuntimeLabel below): it works, but phoc has no
+# session-lock protocol, so the lock screen is an ordinary surface on the same
+# layer and the newer surface wins - the time is invisible exactly when
+# somebody picks the phone up and wants it.
+#
+# A phosh PLUGIN is a widget inside phosh's own indicator box, so it is drawn
+# wherever that box is, lock screen included, in the box's own font, and
+# nothing has to be taken away from the percentage to make room. It lives in
+# phosh-battery-time/ next door and is installed separately, because it needs
+# root and this program does not.
+#
+# The two halves meet at one small file: the daemon writes the time, the
+# widget reads it. No bus, no protocol - the widget runs in the shell's
+# process, so the less it does there the better.
+PLUGIN_ID = "furios-battery-time"
+PLUGIN_SETTING = "mobi.phosh.shell.plugins status-icons"
+PLUGIN_STATE = os.environ.get(
+    "FURIOS_BATTERY_PLUGIN_STATE",
+    os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/run/user/%d" % os.getuid()),
+                 PLUGIN_ID))
+# Where the shell looks. A glob rather than a path, because the directory
+# carries the architecture triplet - and pkg-config, which knows it, is not
+# something to run on every tick.
+PLUGIN_SO_GLOB = os.environ.get(
+    "FURIOS_BATTERY_PLUGIN_SO_GLOB",
+    "/usr/lib/*/phosh/plugins/libphosh-plugin-%s.so" % PLUGIN_ID)
 
 COLORS = {"green": "#2ec27e", "amber": "#e5a50a", "red": "#e01b24"}
 BUCKETS = ("green", "amber", "red")
@@ -763,6 +795,173 @@ def runtime_label(reading, text):
     return "" if percent is None else "%d%%" % int(percent)
 
 
+# ----------------------------------------------------- the icon in phosh's bar
+
+def plugin_installed(pattern=None):
+    """Where the status icon sits on this phone, or None.
+
+    A glob, because the directory carries the architecture triplet - and
+    "not installed" is an ordinary answer here, not a fault: this program
+    works without it and says which way it is showing the time.
+    """
+    found = sorted(glob.glob(pattern or PLUGIN_SO_GLOB))
+    return found[0] if found else None
+
+
+def shell_pid(proc="/proc"):
+    """The running shell's process id, or None."""
+    try:
+        entries = os.listdir(proc)
+    except OSError:
+        return None
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            with open(os.path.join(proc, entry, "comm")) as fh:
+                if fh.read().strip() == "phosh":
+                    return int(entry)
+        except OSError:
+            continue                          # gone between listing and reading
+    return None
+
+
+def process_started(pid, proc="/proc"):
+    """When a process started, in seconds since the epoch - or None.
+
+    Field 22 of /proc/<pid>/stat counts clock ticks since boot and btime in
+    /proc/stat says when boot was. Not the mtime of /proc/<pid>, which is
+    not documented to mean anything in particular.
+    """
+    try:
+        with open(os.path.join(proc, str(pid), "stat")) as fh:
+            stat = fh.read()
+        with open(os.path.join(proc, "stat")) as fh:
+            btime = next(line for line in fh if line.startswith("btime "))
+    except (OSError, StopIteration):
+        return None
+    try:
+        # The command sits in brackets and may hold spaces, so the fields
+        # after it are counted from the closing bracket rather than from the
+        # start of the line: state is the first of them, starttime the 20th.
+        rest = stat[stat.rindex(")") + 2:].split()
+        ticks = float(rest[19])
+        return float(btime.split()[1]) + ticks / os.sysconf("SC_CLK_TCK")
+    except (ValueError, IndexError, ZeroDivisionError):
+        return None
+
+
+def plugin_live(pattern=None, proc="/proc"):
+    """Is the icon not only installed but LOADED by the running shell?
+
+    phosh scans its plugin directory once, when it starts. One put there
+    afterwards is found by nobody until the next start - the shell says so
+    once, "Custom status-icon '...' not found", and then goes quiet. So the
+    question is not whether it is installed but whether it is older than the
+    shell, and until it is, the strip below is still how the time is shown.
+    """
+    path = plugin_installed(pattern)
+    if path is None:
+        return False
+    pid = shell_pid(proc)
+    started = process_started(pid, proc) if pid is not None else None
+    if started is None:
+        return False
+    try:
+        return os.path.getmtime(path) <= started
+    except OSError:
+        return False
+
+
+def time_shown_as(pattern=None, proc="/proc"):
+    """In one line: where the time is drawn, and what is missing if it is
+    not drawn where it should be."""
+    if plugin_live(pattern, proc):
+        return "the status icon in phosh's bar"
+    if plugin_installed(pattern) is None:
+        return ("a strip over the bar - invisible on the lock screen. "
+                "Install phosh-battery-time for an icon in the bar itself")
+    return ("a strip over the bar - the status icon is installed but this "
+            "shell started before it. It is picked up at the next reboot "
+            "(or: systemctl --user restart mobi.phosh.Shell.service)")
+
+
+def plugin_setting():
+    """The list of status-icon plugins the shell loads."""
+    return Setting(schluessel=PLUGIN_SETTING,
+                   umgebung="FURIOS_BATTERY_PLUGIN_SETTING_FILE")
+
+
+def plugin_names(setting=None):
+    """That list, as a list. Anything unreadable reads as empty."""
+    text = (setting or plugin_setting()).get().strip()
+    if text.startswith("@as "):               # gsettings' way of typing []
+        text = text[4:].strip()
+    if not text.startswith("["):
+        return []
+    try:
+        names = ast.literal_eval(text)
+    except (ValueError, SyntaxError):
+        return []
+    return [n for n in names if isinstance(n, str)]
+
+
+def set_plugin_names(names, setting=None):
+    """Write that list back, in the form gsettings reads."""
+    text = "[%s]" % ", ".join("'%s'" % n for n in names) if names else "@as []"
+    return (setting or plugin_setting()).set(text)
+
+
+def list_plugin(setting=None):
+    """Have the shell load our icon, without disturbing anybody else's.
+
+    The key holds other people's plugins too, so it is read, changed and
+    written - never set to a list of our own making.
+    """
+    setting = setting or plugin_setting()
+    names = plugin_names(setting)
+    if PLUGIN_ID in names:
+        return True
+    return set_plugin_names(names + [PLUGIN_ID], setting)
+
+
+def unlist_plugin(setting=None):
+    """Take it out again, and leave the rest of the list alone."""
+    setting = setting or plugin_setting()
+    names = plugin_names(setting)
+    if PLUGIN_ID not in names:
+        return True
+    return set_plugin_names([n for n in names if n != PLUGIN_ID], setting)
+
+
+def show_time(text, path=None):
+    """The time the widget in the bar reads - written whole or not at all.
+
+    Beside the target and renamed, so the widget never reads half a line.
+    The renaming is also why it watches the DIRECTORY: the inode changes
+    with every write.
+    """
+    target = path or PLUGIN_STATE
+    tmp = target + ".new"
+    try:
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(tmp, "w") as fh:
+            fh.write(text + "\n")
+        os.replace(tmp, target)
+    except OSError:
+        return False
+    return True
+
+
+def clear_time(path=None):
+    """No time to show. The widget hides itself when the file goes."""
+    try:
+        os.remove(path or PLUGIN_STATE)
+    except OSError:
+        return False
+    return True
+
+
 # --------------------------------------------------------------- Konfiguration
 
 def load_config(path=None):
@@ -1419,6 +1618,11 @@ def describe(cfg=None, setting=None, base=None):
         # A theme we cannot build on is the one failure that leaves everything
         # else looking healthy, so it is stated rather than implied.
         "can_theme": light is not None,
+        # Which of the two ways the time is shown, in the words somebody
+        # needs to do something about it. "Installed but not loaded" is the
+        # one that looks like a fault and is not: the shell reads its plugin
+        # directory when it starts and never again.
+        "time_shown_as": time_shown_as(),
         "config": cfg,
     }
 
@@ -1468,6 +1672,8 @@ def cmd_status(argv):
     print("charge time:  %s (on a cable)" % ("on" if cfg["charge_time"] else "off"))
     print("would show:   %s"
           % (state["runtime"] or "the percentage - no time for this state"))
+    if cfg["runtime"] or cfg["charge_time"]:
+        print("shown as:     %s" % state["time_shown_as"])
     return 0 if state["readable"] else 1
 
 
@@ -1532,6 +1738,11 @@ def cmd_reset(_argv):
     daemon that is gone has lost a reading and been given nothing for it.
     """
     zurueck = release_percentage_space()
+    # And the icon in the bar with it: a time from a daemon that is gone
+    # goes stale where anybody can read it. The file first, so nothing is
+    # left standing if the setting cannot be written.
+    clear_time()
+    unlist_plugin()
     setting = Setting()
     current = setting.get()
     base = base_name(current)
@@ -2076,6 +2287,14 @@ def cmd_daemon(_argv):
             return gesetzt
 
     prozent = GioFlag()
+    # The list of status-icon plugins, through the command line and not
+    # through Gio: it is read once here and written twice in the life of a
+    # daemon - when the option goes on and when it goes off - so a fork
+    # costs nothing, and one class fewer is one class fewer.
+    plugins = plugin_setting()
+    # Whether the shell is currently told to load our icon. Read once and
+    # then remembered, so an ordinary tick asks dconf nothing.
+    plugin_on = PLUGIN_ID in plugin_names(plugins)
     daemon = Daemon(setting=GioSetting())
     # Leftovers from an older rule, before anything new is written: the
     # names differ, so nothing in use is touched.
@@ -2117,6 +2336,54 @@ def cmd_daemon(_argv):
         value = lockwatch.get_cached_property("LockedHint")
         return locked if value is None else value.get_boolean()
 
+    def draw_time_in_bar():
+        """The widget in phosh's own indicator box: write the time, or take
+        it away.
+
+        Nothing to claim and nothing to blank. The widget has a place of its
+        own in the bar, so phosh's percentage stays exactly where it was -
+        which is the whole difference to the strip below: no theme is
+        touched, no setting of somebody else's is taken away, and the lock
+        screen shows it like any other icon up there.
+
+        No fallback to the percentage either, for the same reason. The strip
+        stood IN the percentage's place and had to put something there; this
+        one is beside it, and a phone that is full or moving nothing simply
+        has no time to show.
+        """
+        nonlocal strip, plugin_on
+        if strip is not None:
+            # The shell restarted with the plugin in it while we were
+            # running. The strip goes, and the percentage comes back.
+            strip.close()
+            strip = None
+            daemon.blank_percent = False
+            daemon.apply(daemon.showing, now=time.time() + daemon.cfg["dwell_s"])
+            release_percentage_space(prozent)
+            print("the shell has the status icon now - the strip is down and "
+                  "phosh's percentage is back", flush=True)
+        if not strip_wanted(daemon.cfg):
+            if plugin_on:
+                unlist_plugin(plugins)
+                plugin_on = False
+                clear_time()
+                print("time left off - the icon is out of the bar", flush=True)
+            return
+        if not plugin_on:
+            if list_plugin(plugins):
+                plugin_on = True
+                print("time left in the top bar", flush=True)
+            else:
+                print("could not add %s to %s - no time in the bar"
+                      % (PLUGIN_ID, PLUGIN_SETTING), file=sys.stderr, flush=True)
+                return
+        text = daemon.runtime() if time_wanted(daemon.last_reading,
+                                               daemon.cfg) else None
+        if text:
+            show_time(text)
+        else:
+            clear_time()
+
     def draw_time():
         """The strip follows the setting, in both directions.
 
@@ -2127,6 +2394,13 @@ def cmd_daemon(_argv):
         it - the strip and the gap it fills are one decision.
         """
         nonlocal strip, yielded, locked
+        # Which of the two ways the time is shown. Asked on every tick and
+        # not once at startup: the shell can restart under us, and the
+        # plugin it finds then changes the answer without this daemon being
+        # restarted. Three small reads in /proc, on a tick that is rare.
+        if plugin_live():
+            draw_time_in_bar()
+            return
         locked = lock_state()
         # percentage_switched_off() only where the answer is used, so an
         # ordinary tick with no strip and no option costs no gsettings call.
@@ -2265,6 +2539,11 @@ def cmd_daemon(_argv):
         # missing percentage with nothing in its place is the same thing
         # said by an absence.
         release_percentage_space()
+        # A time left standing in the bar would go stale within minutes and
+        # nothing would be left to correct it. The widget hides itself when
+        # the file goes; the setting stays, so a daemon that comes back has
+        # its place waiting.
+        clear_time()
         daemon.blank_percent = False
         daemon.apply((None, None), now=time.time() + daemon.cfg["dwell_s"])
         loop_.quit()
