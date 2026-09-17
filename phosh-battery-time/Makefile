@@ -37,8 +37,10 @@ uninstall:
 # The test builds against the same headers and loads the built .so the way
 # the shell does. It needs a display, and says so rather than failing when
 # there is none - see tests/run-tests.sh.
+# -ldl: the test opens phosh's library itself, the way the shell's process
+# has it open already - without it there is no status icon to derive from.
 tests/plugin-loads: tests/plugin-loads.c
-	$(CC) $(CFLAGS) -o $@ $< $(LDLIBS)
+	$(CC) $(CFLAGS) -o $@ $< $(LDLIBS) -ldl
 
 check: $(SO) tests/plugin-loads
 	./tests/plugin-loads .

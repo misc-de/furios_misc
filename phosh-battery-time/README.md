@@ -2,10 +2,10 @@
 
 A plugin for phosh's top bar. It shows one thing: the time
 [`battctl`](../battery/) writes for it — how long the battery lasts, or how
-long until it is full — in the shell's own indicator box, in the shell's own
-font.
+long until it is full — in the shell's own indicator box, immediately left of
+the battery icon, in the size of the clock.
 
-    04:38  🔋
+    04:38 🔋 76%
 
 It is one C file. It reads one small file in `$XDG_RUNTIME_DIR`, believes
 nothing about it, and does nothing else: every failure is "show nothing",
@@ -25,11 +25,44 @@ screen is created when the phone is locked, which is after us. Measured with
 two strips side by side: the one started second covers the first.
 
 A plugin is a widget **inside** phosh's indicator box, so it is drawn wherever
-that box is, lock screen included. It inherits that box's font, which is how
-it ends up looking like the percentage beside it without a line of CSS. And
-nothing has to be taken away from the percentage to make room, so the theme
-machinery the strip needs — a stylesheet that empties `phosh-battery-info
-label` and holds its width — is not needed at all.
+that box is, lock screen included. And nothing has to be taken away from the
+percentage to make room, so the theme machinery the strip needs — a
+stylesheet that empties `phosh-battery-info label` and holds its width — is
+not needed at all.
+
+## Where it stands, and why that took a priority
+
+phosh's `PhoshStatusIconsBox` keeps its children in **descending priority**
+and puts anything that is not a `PhoshStatusIcon` — a plain label, which is
+what this was at first — at the very start of the box. So the time sat at the
+left-hand end of the right-hand group, a location pin away from the battery
+it talks about.
+
+So this is a status icon now, and it derives from phosh's own
+`PhoshStatusIcon`: one symbol, `phosh_status_icon_get_type`, left undefined
+in the module and filled in by the shell that loads it — the way phosh's own
+status-icon plugins do it. The type is registered at load time against the
+sizes `g_type_query` reports, because the only phosh header on the system is
+the one with the extension point names in it.
+
+That alone is not enough. Every icon in the bar has priority 10, and the box
+inserts a new child **in front of** the ones it ties with — so 10 lands left
+of the location pin and 9 lands right of the percentage. Neither is beside
+the battery. What works is to tie with the battery and nobody else: the
+plugin finds `PhoshBatteryInfo` in the box, turns its priority down to 9,
+takes 9 itself, and the tie puts it immediately in front.
+
+It is one small write into a widget of the shell's, and it is given back when
+this widget goes. It costs the battery nothing: the box drops what it cannot
+fit from the right, and the battery already stood last.
+
+## The size
+
+The indicator box is 13px, which is the size of the battery percentage; the
+clock is 16px. This asks for the clock's size, so the label carries a
+stylesheet of its own — `font-size`, `font-weight`, tabular figures — added to
+that one widget's style context and to nothing else. No screen-wide
+stylesheet, no theme.
 
 ## Install
 
@@ -46,9 +79,12 @@ nothing at all to run.
 **phosh reads its plugin directory once, when it starts.** A plugin put there
 afterwards is found by nobody until the next start — the shell says so once,
 `Custom status-icon 'furios-battery-time' not found`, and then goes quiet. So
-after installing, either reboot or:
+after installing: **reboot.**
 
-    systemctl --user restart mobi.phosh.Shell.service
+There is no lighter way. `mobi.phosh.Shell.service` refuses a manual start
+and a manual stop (`Operation refused, unit … may be requested by dependency
+only`), and taking the shell down by hand takes the session with it —
+`OnFailure=gnome-session-shutdown.target`, `replace-irreversibly`.
 
 `battctl status` says which way the time is being shown, and what is missing
 if it is the other one.
@@ -86,8 +122,15 @@ the name the settings hold, build the widget — and drive it through the file
 it reads, including the files it must refuse. Everything that can go wrong
 there goes wrong silently in the shell, which says one line and carries on.
 
-Needs a display to build a GTK widget on; without one, or without phosh's
-headers, it says so and skips.
+It also builds the shell's shape around the widget: the plugin looks for
+`PhoshStatusIconsBox` and `PhoshBatteryInfo` **by name**, since neither type
+is in a header we have, so the test registers those two names itself and
+checks what the plugin does with them — the battery's priority comes down to
+meet it, no other icon is touched, and the battery has its priority back when
+the widget goes.
+
+Needs a display to build a GTK widget on, and phosh's library to derive the
+type from; without either, or without phosh's headers, it says so and skips.
 
 ## Uninstall
 

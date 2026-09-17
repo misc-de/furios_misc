@@ -48,8 +48,11 @@ echo
 # phosh scans its plugin directory once, when the shell starts. A plugin put
 # there afterwards is found by nobody until then, and the shell says so in
 # one line: "Custom status-icon 'furios-battery-time' not found".
+#
+# And there is no shortcut: mobi.phosh.Shell.service is RefuseManualStart and
+# RefuseManualStop (measured: "Operation refused, unit ... may be requested by
+# dependency only"), and taking the shell down by hand takes the whole session
+# with it - OnFailure=gnome-session-shutdown.target, replace-irreversibly.
 echo "phosh looks for plugins only when it starts, so this one is picked up"
-echo "at the next reboot - or now, with:"
-echo "    systemctl --user restart mobi.phosh.Shell.service"
-echo "(that restarts the shell: the screen goes back to the lock screen and"
-echo "every open app keeps running)"
+echo "at the next reboot. There is no way to restart the shell on its own:"
+echo "its unit refuses a manual start, and killing it ends the session."

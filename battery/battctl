@@ -87,8 +87,9 @@ STATE = os.environ.get(
 # somebody picks the phone up and wants it.
 #
 # A phosh PLUGIN is a widget inside phosh's own indicator box, so it is drawn
-# wherever that box is, lock screen included, in the box's own font, and
-# nothing has to be taken away from the percentage to make room. It lives in
+# wherever that box is, lock screen included, immediately left of the battery
+# icon, and nothing has to be taken away from the percentage to make room. It
+# lives in
 # phosh-battery-time/ next door and is installed separately, because it needs
 # root and this program does not.
 #
@@ -881,9 +882,11 @@ def time_shown_as(pattern=None, proc="/proc"):
     if plugin_installed(pattern) is None:
         return ("a strip over the bar - invisible on the lock screen. "
                 "Install phosh-battery-time for an icon in the bar itself")
+    # No restart to offer: the shell's unit is RefuseManualStart/Stop, and
+    # killing it takes the session down with it (OnFailure=
+    # gnome-session-shutdown, replace-irreversibly). A reboot it is.
     return ("a strip over the bar - the status icon is installed but this "
-            "shell started before it. It is picked up at the next reboot "
-            "(or: systemctl --user restart mobi.phosh.Shell.service)")
+            "shell started before it. It is picked up at the next reboot")
 
 
 def plugin_setting():

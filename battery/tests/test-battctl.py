@@ -2347,10 +2347,13 @@ class TheIconInTheBar(Base):
         self.assertIn("strip", words)
         self.assertIn("Install", words)
 
-    def test_and_that_a_shell_restart_is_all_that_is_missing(self):
+    def test_and_that_a_reboot_is_all_that_is_missing(self):
+        """A reboot, and nothing lighter: the shell's unit refuses a manual
+        start, and killing it takes the session down with it."""
         self.plugin_file(when=3000.0)
         words = b.time_shown_as(proc=self.fake_proc(2000.0))
-        self.assertIn("restart", words)
+        self.assertIn("reboot", words)
+        self.assertNotIn("systemctl", words)
 
     # --- putting things back ------------------------------------------
 

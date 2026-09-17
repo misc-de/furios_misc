@@ -4,9 +4,10 @@
 #
 # Builds the plugin and loads it the way phosh does. NEVER with sudo.
 #
-# Two things can be missing here, and they are missing for different reasons:
-# phosh's headers, which an ordinary runner has no reason to carry, and a
-# display, which a runner has none of. Both are a skip; anything else is a
+# Three things can be missing here, and they are missing for different
+# reasons: phosh's headers, which an ordinary runner has no reason to carry,
+# a display, which a runner has none of, and phosh's library, which the
+# widget derives its type from. All three are a skip; anything else is a
 # failure.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -31,12 +32,19 @@ else
     elif [ -n "${WAYLAND_DISPLAY:-}" ] && [ "${WAYLAND_DISPLAY#/}" = "${WAYLAND_DISPLAY}" ]; then
         export WAYLAND_DISPLAY="${XDG_RUNTIME_DIR:-/nonexistent}/$WAYLAND_DISPLAY"
     fi
-    if make -C "$ROOT" check; then
-        :
-    elif [ $? -eq 77 ]; then
-        printf '  \033[33mskipped\033[0m - no display\n'
-    else
+    # Built and then run, rather than `make check`: make answers 2 for any
+    # recipe that failed, so a skip (77) coming back through it would be
+    # read as a failure.
+    if ! make -C "$ROOT" all tests/plugin-loads; then
         FAILED=$((FAILED + 1))
+    else
+        "$ROOT/tests/plugin-loads" "$ROOT"
+        rc=$?
+        if [ "$rc" -eq 77 ]; then
+            :   # the test says what it is missing, and it is not a failure
+        elif [ "$rc" -ne 0 ]; then
+            FAILED=$((FAILED + 1))
+        fi
     fi
 fi
 
