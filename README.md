@@ -20,6 +20,7 @@ operated from the same app, [furios_app][p].
 | | | |
 |---|---|---|
 | [battery](battery/) | `battctl` | The battery icon takes colour: the frame from the charging power, the filling from the charge level |
+| [phosh-battery-time](phosh-battery-time/) | a phosh plugin | The time `battctl` works out, as a status icon in the top bar — lock screen included |
 
 Each directory stands on its own: its own README, its own `install.sh`, its
 own tests.
@@ -45,6 +46,8 @@ So that the collection stays a collection and does not become a heap:
   `uninstall.sh`, or a subcommand that restores the shipped state.
 - **Tests run on the phone**, without a display, without root, without
   third-party packages. `./run-tests.sh` calls those of every subproject.
+  Where that cannot hold — the phosh plugin is a GTK widget and needs a
+  display to be built on — the suite says so and skips rather than fails.
 
 ## Tests
 

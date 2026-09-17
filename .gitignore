@@ -1,3 +1,9 @@
-# Byte-Code der Testlaeufe
+# Byte code from test runs
 __pycache__/
 *.pyc
+
+# What the compiler builds: the plugin, the metadata file generated from
+# plugin.in, and the test program.
+*.so
+phosh-battery-time/furios-battery-time.plugin
+phosh-battery-time/tests/plugin-loads

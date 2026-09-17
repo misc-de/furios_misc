@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 misc-de
+# SPDX-License-Identifier: MIT
+#
+# Written by the Makefile: @PLUGIN_DIR@ is where phosh's own
+# pkg-config file says status-icon plugins live.
+[Plugin]
+Id=furios-battery-time
+Name=Battery time left
+Types=status-icon;
+Comment=How long the battery lasts, in the top bar, beside the battery icon
+Plugin=@PLUGIN_DIR@/libphosh-plugin-furios-battery-time.so
