@@ -563,3 +563,34 @@ written back so another plugin in it survives, the time is written beside the
 target and renamed so the widget never reads half a line, and `cmd_reset` -
 what `ExecStopPost` runs - takes both away. A time from a daemon that is gone
 would go stale where anybody can read it.
+
+## 15 · The theme was never ours to change
+
+Reported on 23./24.9.2026: the active buttons in the quick settings were
+blue instead of the grey configured in phosh (accent colour `slate`), Delta
+Chat lost its dark mode, and both came and went. The user's suspicion - that
+it started with this project - was right.
+
+phosh applies the accent colour through its own stylesheet only for a fixed
+list of themes, found in `libphosh-0.45.so.0` right beside the code that
+writes `@define-color theme_selected_bg_color` and listens to
+`notify::gtk-theme-name`: `Adwaita`, `Adwaita-dark`, `adw-gtk3`,
+`adw-gtk3-dark`. The names `battctl` switched to (`adw-gtk3-batt…`) are not
+on it, so every colour change took the accent colour away, and every change
+back gave it back. Flatpak apps get the theme name through the portal and
+did not know ours either.
+
+The proof, on the device: service stopped, `gtk-theme` back on `adw-gtk3`,
+buttons grey. `icon-theme` stood on `furios-battery-f8ba` at the same time -
+another system value we had taken.
+
+The fix moves the colour into the widget in the bar. `battctl` writes two
+words and two colours into `$XDG_RUNTIME_DIR/furios-battery-color`; the
+widget builds one rule from them and adds it to the battery image's own
+style context. Nothing else in the shell sees it, and no desktop setting is
+written - except the plugin list the widget has to be on. What went with it:
+the generated themes, the icon theme with split-off fillings and bolts (the
+bolt no longer takes a colour of its own, frame and bolt are one path in
+Adwaita), and the strip with the emptied percentage. `battctl reset` and the
+daemon's start put back what an older version left on a phone.
+

@@ -2,9 +2,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 misc-de
 # SPDX-License-Identifier: MIT
 #
-# Installs into the user's home. No root anywhere: this reads two files in
-# /sys, writes ~/.themes and sets one gsettings key - all of it things the
-# session may do anyway. NEVER start it with sudo.
+# Installs into the user's home. No root anywhere: this reads files in /sys,
+# writes two small files in the runtime directory and adds the widget to
+# phosh's plugin list - all of it things the session may do anyway. NEVER start it with sudo.
 set -euo pipefail
 
 if [ "$(id -u)" = 0 ]; then

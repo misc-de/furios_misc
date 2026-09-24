@@ -1,22 +1,22 @@
-# phosh-battery-time — the time left, as a status icon
+# phosh-battery-time — the time left and the battery's colour
 
-A plugin for phosh's top bar. It shows one thing: the time
-[`battctl`](../battery/) writes for it — how long the battery lasts, or how
-long until it is full — in the shell's own indicator box, immediately left of
-the battery icon, in the size of the clock.
+A plugin for phosh's top bar. It does two things for
+[`battctl`](../battery/): it shows the time `battctl` writes for it — how
+long the battery lasts, or how long until it is full — in the shell's own
+indicator box, immediately left of the battery icon; and it puts the colour
+`battctl` decides on that battery icon.
 
     04:38 🔋 76%
 
-It is one C file. It reads one small file in `$XDG_RUNTIME_DIR`, believes
-nothing about it, and does nothing else: every failure is "show nothing",
+It is one C file. It reads two small files in `$XDG_RUNTIME_DIR`, believes
+nothing about them, and does nothing else: every failure is "show nothing",
 because this runs **inside phosh's process** and a shell that dies over an
 odd battery reading would be a far worse bargain than a missing number.
 
 ## Why a plugin and not a window of our own
 
-That is what `battctl` did first, and still does when this is not installed:
-a layer-shell strip over the top bar, in the place the percentage is emptied
-out of.
+That is what `battctl` did first: a layer-shell strip over the top bar, in
+the place the percentage is emptied out of.
 
 It works, and it is invisible exactly when you want it. phoc has no
 session-lock protocol, so phosh's lock screen is an ordinary layer surface on
@@ -92,11 +92,36 @@ only`), and taking the shell down by hand takes the session with it —
 `battctl status` says which way the time is being shown, and what is missing
 if it is the other one.
 
+## The colour
+
+`battctl` writes `$XDG_RUNTIME_DIR/furios-battery-color`, a line per half:
+
+    frame #e5a50a
+    fill #e01b24
+
+The widget turns that into one rule —
+`image { color: …; -gtk-icon-palette: success …, warning …, error …; }` —
+in a `GtkCssProvider` of its own, and adds that provider to the style
+context of the battery icon's image, and to nothing else. A provider on one
+widget's context reaches that widget alone: not the icons beside it, not the
+rest of the shell, not any other program. It is taken off again when the
+widget goes.
+
+The file is not CSS. Two known words, each with a `#rrggbb`; anything else
+in it means no colour at all, so nothing written there can reach further
+than those two declarations.
+
+Why here and not in a theme: until 24.9.2026 `battctl` coloured the icon by
+switching `gtk-theme` to generated themes of its own. phosh applies the
+accent colour only to the themes it knows by name, so the quick settings
+went blue, and Flatpak apps that did not know the name lost their dark mode.
+In here, no setting is read or written at all.
+
 ## Switching it on
 
 Nothing here does. `battctl` adds `furios-battery-time` to the shell's
-`status-icons` list when **time left** or **charging time** is switched on,
-takes it out again when both are off, and writes the time in between. The
+`status-icons` list while any of its options is on — a colour or a time —
+takes it out again when none is, and writes the two files in between. The
 list is read, changed and written back, so another plugin in it is left where
 it is.
 
@@ -129,8 +154,10 @@ It also builds the shell's shape around the widget: the plugin looks for
 `PhoshStatusIconsBox` and `PhoshBatteryInfo` **by name**, since neither type
 is in a header we have, so the test registers those two names itself and
 checks what the plugin does with them — the battery's priority comes down to
-meet it, no other icon is touched, and the battery has its priority back when
-the widget goes.
+meet it, no other icon is touched, the colour lands on the battery's image
+and on no other widget (not even our own label), a file that is not a colour
+leaves the battery plain, and the battery has its priority and its own
+colour back when the widget goes.
 
 Needs a display to build a GTK widget on, and phosh's library to derive the
 type from; without either, or without phosh's headers, it says so and skips.

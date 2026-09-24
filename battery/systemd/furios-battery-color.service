@@ -3,9 +3,9 @@
 [Unit]
 Description=Colour the battery icon by charge power
 Documentation=file:%h/.local/share/doc/furios-battery/README.md
-# The colour is a GTK theme, and phosh has to be there to be restyled. Not a
-# hard dependency: started too early it simply sets the theme and phosh reads
-# it when it comes up.
+# The colour and the time are read by the widget in phosh's bar. Not a hard
+# dependency: started too early it simply writes its two files and the widget
+# reads them when the shell comes up.
 After=mobi.phosh.Shell.service
 PartOf=graphical-session.target
 # StartLimit* belong in [Unit] - in [Service] systemd parses them and throws
@@ -19,7 +19,7 @@ StartLimitIntervalSec=60
 [Service]
 Type=simple
 ExecStart=%h/.local/bin/battctl daemon
-# The theme goes back whatever happens - the daemon does it on SIGTERM, and
+# Colour and time go whatever happens - the daemon does it on SIGTERM, and
 # this catches the rest, including a kill -9. A phone left showing a green
 # battery by a daemon that is gone would be worse than no colour at all.
 ExecStopPost=%h/.local/bin/battctl reset

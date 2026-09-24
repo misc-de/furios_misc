@@ -53,8 +53,8 @@ class Base(unittest.TestCase):
         # Complete, and that is not fussiness: the version without ICON_BASE
         # deleted the icons of the running phone during a test run and left a
         # broken icon in the bar (15.9.2026).
-        self.old_paths = (b.SYSFS, b.CONFIG, b.THEMES, list(b.THEME_DIRS),
-                    b.ICON_BASE, b.ICON_SOURCE, list(b.ICON_DIRS), b.STATE,
+        self.old_paths = (b.SYSFS, b.CONFIG, b.THEMES, b.COLOUR_STATE,
+                    b.ICON_BASE, None, list(b.ICON_DIRS), b.STATE,
                     b.PLUGIN_STATE, b.PLUGIN_SO_GLOB)
         self.alter_pfad = os.environ["PATH"]
         self.icon_root = os.path.join(self.tmp, "icons")
@@ -82,12 +82,14 @@ class Base(unittest.TestCase):
             fh.write("@as []\n")
         os.environ["FURIOS_BATTERY_PLUGIN_SETTING_FILE"] = self.plugin_setting
         b.PLUGIN_STATE = os.path.join(self.tmp, "furios-battery-time")
+        # And the colour the widget reads - the one file the daemon writes
+        # for the icon, and the running shell's if this were left alone.
+        b.COLOUR_STATE = os.path.join(self.tmp, "furios-battery-color")
         b.PLUGIN_SO_GLOB = os.path.join(self.tmp, "plugins", "libphosh-*.so")
         b.STATE = os.path.join(self.tmp, "state.json")
         b.SYSFS = self.sysfs
         b.CONFIG = os.path.join(self.tmp, "config.json")
         b.THEMES = self.themes
-        b.THEME_DIRS[:] = [self.themes]
         self.set_theme("base")
         os.environ["FURIOS_BATTERY_SETTING_FILE"] = self.setting
         # No icon name unless a test says one: otherwise every run would
@@ -112,8 +114,8 @@ class Base(unittest.TestCase):
 
     def tearDown(self):
         b.SYSFS, b.CONFIG, b.THEMES = self.old_paths[:3]
-        b.THEME_DIRS[:] = self.old_paths[3]
-        b.ICON_BASE, b.ICON_SOURCE = self.old_paths[4], self.old_paths[5]
+        b.COLOUR_STATE = self.old_paths[3]
+        b.ICON_BASE = self.old_paths[4]
         b.ICON_DIRS[:] = self.old_paths[6]
         b.STATE = self.old_paths[7]
         b.PLUGIN_STATE, b.PLUGIN_SO_GLOB = self.old_paths[8], self.old_paths[9]
@@ -156,18 +158,30 @@ class Base(unittest.TestCase):
         with open(self.setting, "w") as fh:
             fh.write(name + "\n")
 
-    def alle_themes(self, base="base"):
-        """The three power colours, as write_themes used to write them."""
-        return [b.write_theme(base, colour, None) for colour in b.BUCKETS]
+    def old_theme(self, base="base", power=None, level=None):
+        """A theme directory the way versions before 24.9.2026 wrote one:
+        our name, and a stylesheet that says it is ours."""
+        name = "%s-batt5ae1-%s-%s-d" % (base, power or "none", level or "none")
+        gtk3 = os.path.join(self.themes, name, "gtk-3.0")
+        os.makedirs(gtk3, exist_ok=True)
+        with open(os.path.join(gtk3, "gtk.css"), "w") as fh:
+            fh.write("/* Written by battctl (furios_misc). */\n")
+        return name
 
-    def icon_with_bolt(self, name):
-        """An icon in the search path whose bolt is a path of its own."""
-        folder = os.path.join(self.icon_root, "Adwaita", "symbolic", "status")
-        os.makedirs(folder, exist_ok=True)
-        with open(os.path.join(folder, name + ".svg"), "w") as fh:
-            fh.write('<svg>%s<path class="warning" d="M 13 8"/>'
-                     '<path class="success" d="m 5 7"/>'
-                     '<path d="m 7 0"/></svg>' % b.BOLT_MARK)
+    def old_icon_theme(self, inherits="Papirus", name="furios-battery-f8ba"):
+        """The icon theme older versions wrote, with one marked icon in it."""
+        folder = os.path.join(self.icon_root, name)
+        os.makedirs(os.path.join(folder, "symbolic", "status"))
+        with open(os.path.join(folder, "index.theme"), "w") as fh:
+            fh.write("[Icon Theme]\nInherits=%s,hicolor\n" % inherits)
+        with open(os.path.join(folder, "symbolic", "status",
+                               "battery-level-50-symbolic.svg"), "w") as fh:
+            fh.write("<svg>%s</svg>" % b.ICON_MARK)
+        return name
+
+    def shown(self):
+        """The pair the widget in the bar would draw."""
+        return b.shown_colour()
 
     def icon_with_two_areas(self, name):
         """An icon in the search path that has a filling area of its own."""
@@ -176,15 +190,6 @@ class Base(unittest.TestCase):
         with open(os.path.join(folder, name + ".svg"), "w") as fh:
             fh.write('<svg><path class="success" d="m 5 7"/>'
                      '<path d="m 7 0"/></svg>')
-
-    def make_theme(self, name, dark=True):
-        gtk3 = os.path.join(self.themes, name, "gtk-3.0")
-        os.makedirs(gtk3, exist_ok=True)
-        with open(os.path.join(gtk3, "gtk.css"), "w") as fh:
-            fh.write("/* the user's own */\n")
-        if dark:
-            with open(os.path.join(gtk3, "gtk-dark.css"), "w") as fh:
-                fh.write("/* the user's own, dark */\n")
 
     def run_cmd(self, *argv):
         out, err = io.StringIO(), io.StringIO()
@@ -505,356 +510,12 @@ class IconFamilies(Base):
         self.assertIsNone(b.upower_icon())
 
 
-class OwnIconTheme(Base):
-    """Our own icon theme - Adwaita inherited, plus discharge icons with a
-    filling area that can be coloured on its own."""
-
-    def setUp(self):
-        super().setUp()
-        self.source = os.path.join(self.tmp, "adwaita")
-        os.makedirs(self.source)
-        b.ICON_SOURCE = self.source
-
-    def original(self, level, klasse=False):
-        path = os.path.join(self.source, "battery-level-%d-symbolic.svg" % level)
-        with open(path, "w") as fh:
-            fh.write('<svg height="16px" width="16px">\n'
-                     + ('<path class="success" d="m 5 7"/>\n' if klasse else "")
-                     + '<path d="m 7 0 c -1 0"/>\n</svg>')
-        return path
-
-    def files(self):
-        return sorted(os.listdir(os.path.join(
-            b.icon_theme_dir(), "symbolic", "status")))
-
-    def test_the_filling_area_is_added(self):
-        self.original(90)
-        names = b.write_icon_theme("Adwaita")
-        self.assertEqual(names, ["battery-level-90-symbolic.svg"])
-        text = open(os.path.join(b.icon_theme_dir(), "symbolic", "status",
-                                 names[0])).read()
-        self.assertIn('class="success"', text)
-        # 90 % is seven of eight units, resting on 13 at the bottom
-        self.assertIn('d="m 5 6 h 6 v 7 h -6 z"', text)
-        self.assertIn("battctl", text)
-
-    def test_the_geometry_is_right_per_level(self):
-        for level, expected in ((100, "m 5 5 h 6 v 8 h -6 z"),
-                                (50, "m 5 9 h 6 v 4 h -6 z"),
-                                (30, "m 5 11 h 6 v 2 h -6 z")):
-            self.original(level)
-            b.write_icon_theme("Adwaita")
-            text = open(os.path.join(b.icon_theme_dir(), "symbolic", "status",
-                                     "battery-level-%d-symbolic.svg" % level)).read()
-            self.assertIn(expected, text, level)
-
-    def test_the_theme_inherits_the_users_own(self):
-        self.original(90)
-        b.write_icon_theme("Papirus")
-        index = open(os.path.join(b.icon_theme_dir(), "index.theme")).read()
-        self.assertIn("Inherits=Papirus,hicolor", index)
-        self.assertEqual(b.icon_base_theme(), "Papirus")
-
-    def test_no_icons_no_index(self):
-        """A theme with no files would be one that only changes the setting
-        and can do nothing."""
-        self.assertEqual(b.write_icon_theme("Adwaita"), [])
-        self.assertFalse(os.path.exists(os.path.join(b.icon_theme_dir(),
-                                                     "index.theme")))
-        self.assertIsNone(b.icon_base_theme())
-
-    def test_what_already_has_two_areas_stays_untouched(self):
-        self.original(20, klasse=True)
-        self.assertEqual(b.write_icon_theme("Adwaita"), [])
-
-    def test_an_empty_battery_has_nothing_to_colour(self):
-        self.original(0)
-        self.assertEqual(b.write_icon_theme("Adwaita"), [])
-
-    def test_writing_twice_changes_nothing(self):
-        self.original(90)
-        b.write_icon_theme("Adwaita")
-        path = os.path.join(b.icon_theme_dir(), "symbolic", "status",
-                            "battery-level-90-symbolic.svg")
-        before = os.stat(path).st_mtime_ns
-        b.write_icon_theme("Adwaita")
-        self.assertEqual(before, os.stat(path).st_mtime_ns)
-
-    def test_a_missing_source_does_not_crash(self):
-        b.ICON_SOURCE = os.path.join(self.tmp, "does-not-exist")
-        self.assertEqual(b.write_icon_theme("Adwaita"), [])
-        self.assertIsNone(b.split_icon_svg("/does/not/exist", 50))
-
-    def test_switching_on_sets_the_setting(self):
-        self.original(90)
-        self.assertTrue(b.use_icon_theme())
-        self.assertEqual(b.icon_setting().get(), b.ICON_THEME)
-
-    def test_and_remembers_the_users_own_theme(self):
-        self.original(90)
-        with open(self.icon_setting, "w") as fh:
-            fh.write("Papirus\n")
-        b.use_icon_theme()
-        self.assertEqual(b.icon_base_theme(), "Papirus")
-        # A second run must not overwrite it with our own name - the way
-        # back would be gone.
-        b.use_icon_theme()
-        self.assertEqual(b.icon_base_theme(), "Papirus")
-
-    def test_without_usable_icons_nothing_is_switched(self):
-        self.assertFalse(b.use_icon_theme())
-        self.assertEqual(b.icon_setting().get(), "Adwaita")
-
-    def test_back_means_the_setting_first_then_the_files(self):
-        """In dieser Reihenfolge: ein Thema, dessen Dateien unter einer
-        shell that has them cached leaves a broken icon in the bar - seen
-        on the device."""
-        self.original(90)
-        b.use_icon_theme()
-        self.assertEqual(b.drop_icon_theme(), 1)
-        self.assertEqual(b.icon_setting().get(), "Adwaita")
-        self.assertFalse(os.path.exists(b.icon_theme_dir()))
-
-    def test_a_foreign_directory_of_the_same_name_stays(self):
-        folder = os.path.join(b.icon_theme_dir(), "symbolic", "status")
-        os.makedirs(folder)
-        with open(os.path.join(folder, "battery-level-90-symbolic.svg"), "w") as fh:
-            fh.write("<svg>somebody else's</svg>")
-        self.assertEqual(b.drop_icon_theme(), 0)
-        self.assertTrue(os.path.exists(folder))
-
-    def test_afterwards_the_icon_counts_as_split(self):
-        """The point of the whole exercise: from now on the discharge icon
-        has two areas."""
-        self.original(90)
-        b.write_icon_theme("Adwaita")
-        self.assertTrue(b.icon_is_split("battery-level-90-symbolic"))
-
-
-class Names(Base):
-    def test_our_own_theme_is_recognised(self):
-        self.assertEqual(b.base_name(b.theme_name("adw-gtk3", "green")),
-                         "adw-gtk3")
-        # And the ones an older version of the rule wrote, with a different
-        # token or none at all - otherwise an upgrade would take somebody's
-        # own theme to be "adw-gtk3-batt-green".
-        self.assertEqual(b.base_name("adw-gtk3-batt-red"), "adw-gtk3")
-        self.assertEqual(b.base_name("adw-gtk3-batt9f9f-red"), "adw-gtk3")
-
-    def test_a_foreign_theme_stays(self):
-        self.assertEqual(b.base_name("adw-gtk3"), "adw-gtk3")
-        self.assertEqual(b.base_name("Yaru-batt-blue"), "Yaru-batt-blue")
-        self.assertEqual(b.base_name("batt-green"), "batt-green")
-        self.assertEqual(b.base_name(""), "")
-
-    def test_building_a_name(self):
-        self.assertEqual(b.theme_name("adw-gtk3", "amber"),
-                         "adw-gtk3-batt%s-amber-none-d" % b.TOKEN)
-        self.assertEqual(b.theme_name("adw-gtk3", None, "red"),
-                         "adw-gtk3-batt%s-none-red-d" % b.TOKEN)
-        # The third part says which shape the power colour lands on.
-        self.assertEqual(b.theme_name("adw-gtk3", "red", "amber", "c"),
-                         "adw-gtk3-batt%s-red-amber-c" % b.TOKEN)
-        # Both halves are independent, and the name says both.
-        self.assertEqual(b.colours_of(b.theme_name("adw-gtk3", "green", "red")),
-                         ("green", "red"))
-        self.assertEqual(b.colours_of(b.theme_name("adw-gtk3", None, "amber")),
-                         (None, "amber"))
-        self.assertEqual(b.colours_of("adw-gtk3"), ("", ""))
-
-    def test_there_and_back(self):
-        for base in ("adw-gtk3", "Adwaita", "a-b-c"):
-            for bucket in b.BUCKETS:
-                self.assertEqual(b.base_name(b.theme_name(base, bucket)), base)
-
-
-class Themes(Base):
-    def test_writes_three(self):
-        self.make_theme("base")
-        names = self.alle_themes()
-        self.assertEqual(len(names), 3)
-        for name in names:
-            path = os.path.join(self.themes, name, "gtk-3.0", "gtk.css")
-            body = open(path).read()
-            self.assertIn("phosh-battery-info image", body)
-            self.assertIn("@import", body)
-
-    def test_the_colours_are_right(self):
-        self.make_theme("base")
-        self.alle_themes()
-        for bucket, colour in b.COLORS.items():
-            path = os.path.join(self.themes, b.theme_name("base", bucket),
-                                "gtk-3.0", "gtk.css")
-            self.assertIn(colour, open(path).read())
-
-    def test_both_halves_stand_apart_in_the_rule(self):
-        """The icon is two paths and now says two things: the shell follows
-        `color` (how fast), the filling comes from the symbolic palette (how
-        full). Colouring only the first left a white filling in a red
-        battery - which is what the phone showed on 15.9.2026."""
-        self.make_theme("base")
-        b.write_theme("base", "red", "amber")
-        body = open(os.path.join(self.themes,
-                                   b.theme_name("base", "red", "amber"),
-                                   "gtk-3.0", "gtk.css")).read()
-        self.assertIn("color: %s;" % b.COLORS["red"], body)
-        # success AND error, because the low-level icons draw their filling
-        # with the second one. warning belongs to the bolt and must not
-        # take the filling colour - an 84 %% battery went orange that way.
-        for name in ("success", "error"):
-            self.assertIn("%s %s" % (name, b.COLORS["amber"]), body)
-        self.assertNotIn("warning", body)
-
-    def test_what_says_nothing_is_not_written(self):
-        """"No colour" is said by leaving the declaration out - naming a
-        white would be guessing at a foreground we cannot read."""
-        self.make_theme("base")
-        b.write_theme("base", "red", None)
-        nur_huelle = open(os.path.join(self.themes,
-                                       b.theme_name("base", "red"),
-                                       "gtk-3.0", "gtk.css")).read()
-        self.assertIn("color:", nur_huelle)
-        self.assertNotIn("-gtk-icon-palette", nur_huelle)
-        b.write_theme("base", None, "red")
-        nur_fuellung = open(os.path.join(self.themes,
-                                         b.theme_name("base", None, "red"),
-                                         "gtk-3.0", "gtk.css")).read()
-        self.assertIn("-gtk-icon-palette", nur_fuellung)
-        self.assertNotIn("  color:", nur_fuellung)
-
-    def test_without_either_there_is_no_theme(self):
-        self.make_theme("base")
-        self.assertEqual(b.css_rule(None, None), "")
-        self.assertIsNone(b.write_theme("base", None, None))
-
-    def test_the_rule_is_valid_gtk3_css(self):
-        """Checked against GTK itself rather than by reading it: an unknown
-        property is dropped with a warning nobody sees, and the icon would
-        simply stay half-coloured."""
-        try:
-            import gi
-            gi.require_version("Gtk", "3.0")
-            from gi.repository import Gtk
-        except (ImportError, ValueError):                 # pragma: no cover
-            self.skipTest("no GTK3")
-        self.make_theme("base")
-        self.alle_themes()
-        path = os.path.join(self.themes, b.theme_name("base", "green"), "gtk-3.0",
-                            "gtk.css")
-        text = open(path).read().split("*/", 1)[1]        # without the @import
-        error = []
-        prov = Gtk.CssProvider()
-        prov.connect("parsing-error", lambda p, s, e: error.append(e.message))
-        prov.load_from_data(text.encode())
-        self.assertEqual([], error)
-
-    def test_no_dark_sheet_is_invented(self):
-        """The trap that would change the whole look of the phone: GTK3 uses
-        gtk-dark.css when it exists. Writing one for a theme that has none
-        would put the LIGHT stylesheet behind dark mode."""
-        self.make_theme("base", dark=False)
-        self.alle_themes()
-        path = os.path.join(self.themes, b.theme_name("base", "green"), "gtk-3.0",
-                            "gtk-dark.css")
-        self.assertFalse(os.path.exists(path))
-
-    def test_the_dark_sheet_disappears_again(self):
-        self.make_theme("base", dark=True)
-        self.alle_themes()
-        path = os.path.join(self.themes, b.theme_name("base", "green"), "gtk-3.0",
-                            "gtk-dark.css")
-        self.assertTrue(os.path.exists(path))
-        self.make_theme("base", dark=False)
-        os.unlink(os.path.join(self.themes, "base", "gtk-3.0", "gtk-dark.css"))
-        self.alle_themes()
-        self.assertFalse(os.path.exists(path))
-
-    def test_the_built_in_adwaita(self):
-        light, dark = b.base_css("Adwaita")
-        self.assertTrue(light.startswith("resource:"))
-        self.assertTrue(dark.endswith("gtk-contained-dark.css"))
-
-    def test_an_unknown_theme_is_refused(self):
-        self.assertEqual(b.base_css("does-not-exist"), (None, None))
-        self.assertIsNone(b.write_theme("does-not-exist", "green", None))
-        self.assertFalse(b.can_theme("does-not-exist"))
-
-    def test_the_import_points_at_the_original(self):
-        """@import, not a copy: everything the base theme loads by relative
-        path has to keep resolving against where IT lives."""
-        self.make_theme("base")
-        self.alle_themes()
-        body = open(os.path.join(self.themes, b.theme_name("base", "red"),
-                                   "gtk-3.0", "gtk.css")).read()
-        self.assertIn("file://" + os.path.join(self.themes, "base",
-                                               "gtk-3.0", "gtk.css"), body)
-
-    def test_removing_takes_only_ours(self):
-        self.make_theme("base")
-        self.alle_themes()
-        # Somebody else's theme that happens to fit the pattern.
-        self.make_theme("fremd-batt-green")
-        gone = b.remove_themes()
-        self.assertEqual(gone, 3)
-        self.assertTrue(os.path.isdir(os.path.join(self.themes, "base")))
-        self.assertTrue(os.path.isdir(os.path.join(self.themes,
-                                                   "fremd-batt-green")))
-
-    def test_old_generations_are_recognised_and_only_those(self):
-        """An upgrade must clear out what the old rule wrote without
-        touching what is in use - the names differ by the token, which is
-        the whole reason it is in the name."""
-        self.make_theme("base")
-        aktuell = self.alle_themes()
-        # What an older version would have left behind:
-        for alt_name in ("base-batt-green", "base-batt9f9f-red-none"):
-            gtk3 = os.path.join(self.themes, alt_name, "gtk-3.0")
-            os.makedirs(gtk3)
-            with open(os.path.join(gtk3, "gtk.css"), "w") as fh:
-                fh.write("/* battctl */\n")
-        stale = b.stale_themes()
-        self.assertEqual(sorted(stale),
-                         ["base-batt-green", "base-batt9f9f-red-none"])
-        self.assertEqual(b.remove_themes(only=stale), 2)
-        for name in aktuell:
-            self.assertTrue(os.path.isdir(os.path.join(self.themes, name)), name)
-        self.assertTrue(os.path.isdir(os.path.join(self.themes, "base")))
-
-    def test_without_a_directory_there_is_nothing_stale(self):
-        b.THEMES = os.path.join(self.tmp, "does-not-exist")
-        b.THEME_DIRS[:] = [b.THEMES]
-        self.assertEqual(b.stale_themes(), [])
-
-    def test_removing_without_a_directory(self):
-        b.THEMES = os.path.join(self.tmp, "does-not-exist")
-        self.assertEqual(b.remove_themes(), 0)
-
-    def test_removing_skips_what_it_cannot_read(self):
-        """A directory that fits the name but holds no stylesheet of ours is
-        not ours to delete."""
-        os.makedirs(os.path.join(self.themes, b.theme_name("base", "green"), "gtk-3.0"))
-        self.assertEqual(b.remove_themes(), 0)
-        self.assertTrue(os.path.isdir(os.path.join(self.themes,
-                                                   b.theme_name("base", "green"))))
-
-    def test_a_built_in_theme_is_imported_by_resource(self):
-        """Adwaita has no files on disk - GTK3 carries it as a resource, and
-        the import has to say so rather than pointing at a path."""
-        names = self.alle_themes("Adwaita")
-        self.assertEqual(len(names), 3)
-        body = open(os.path.join(self.themes, b.theme_name("Adwaita", "green"),
-                                   "gtk-3.0", "gtk.css")).read()
-        self.assertIn('@import url("resource:///org/gtk/libgtk/theme/Adwaita/',
-                      body)
-        self.assertNotIn("file://", body)
-
-
 class TheSetting(Base):
     def test_reading_and_writing(self):
         s = b.Setting()
         self.assertEqual(s.get(), "base")
-        self.assertTrue(s.set(b.theme_name("base", "green")))
-        self.assertEqual(s.get(), b.theme_name("base", "green"))
+        self.assertTrue(s.set("adw-gtk3"))
+        self.assertEqual(s.get(), "adw-gtk3")
 
     def test_a_missing_file_is_empty(self):
         os.unlink(self.setting)
@@ -953,7 +614,6 @@ class Commands(Base):
 
     def test_status_readable(self):
         self.battery(ampere=1.9, volt=4.2)
-        self.make_theme("base")
         rc, out, _ = self.run_cmd("status")
         self.assertEqual(rc, 0)
         self.assertIn("state:        Charging", out)
@@ -966,7 +626,6 @@ class Commands(Base):
 
     def test_status_json(self):
         self.battery(ampere=1.9, volt=4.2)
-        self.make_theme("base")
         # Nothing colours anything until it is switched on, so a status run
         # against a fresh install would report "none" and say nothing about
         # the thresholds this test is here for.
@@ -975,23 +634,20 @@ class Commands(Base):
         daten = json.loads(out)
         self.assertEqual(rc, 0)
         self.assertEqual(daten["bucket"], "green")
-        self.assertEqual(daten["base_theme"], "base")
         self.assertEqual(daten["showing"], "none")
-        self.assertTrue(daten["can_theme"])
-
-    def test_status_reports_an_unusable_theme(self):
-        self.battery()
-        rc, out, _ = self.run_cmd("status")
-        self.assertIn("no GTK3 stylesheet", out)
-        self.assertEqual(rc, 0)
+        self.assertNotIn("theme", daten)
 
     def test_status_knows_the_running_colour(self):
         self.battery(ampere=0.2, volt=4.2)
-        self.make_theme("base")
-        self.set_theme(b.theme_name("base", "green"))
+        b.show_colour("green", None)
         _, out, _ = self.run_cmd("status")
         self.assertIn("frame:        green", out)
-        self.assertIn("base theme:   base", out)
+
+    def test_status_says_what_shows_it(self):
+        self.battery()
+        b.save_config(self.cfg_on())
+        _, out, _ = self.run_cmd("status")
+        self.assertIn("shown by:     nothing - the widget is not installed", out)
 
     def test_config_shows_everything(self):
         rc, out, _ = self.run_cmd("config")
@@ -1035,26 +691,36 @@ class Commands(Base):
         self.assertEqual(rc, 2)
         self.assertIn("below", err)
 
-    def test_reset_puts_it_back(self):
-        self.set_theme(b.theme_name("base", "amber"))
+    def test_reset_takes_the_colour_away(self):
+        b.show_colour("amber", "red")
         rc, _, _ = self.run_cmd("reset")
         self.assertEqual(rc, 0)
-        self.assertEqual(b.Setting().get(), "base")
+        self.assertFalse(os.path.exists(b.COLOUR_STATE))
+        self.assertEqual(self.shown(), (None, None))
 
     def test_reset_is_repeatable(self):
         self.assertEqual(self.run_cmd("reset")[0], 0)
+        self.assertEqual(self.run_cmd("reset")[0], 0)
         self.assertEqual(b.Setting().get(), "base")
 
+    def test_reset_writes_no_desktop_setting_of_its_own(self):
+        """The whole point of 24.9.2026: the theme keys are the system's.
+        A reset on a phone we never touched leaves all of them alone."""
+        with open(self.icon_setting, "w") as fh:
+            fh.write("Papirus\n")
+        self.set_theme("adw-gtk3")
+        self.run_cmd("reset")
+        self.assertEqual(b.Setting().get(), "adw-gtk3")
+        self.assertEqual(b.icon_setting().get(), "Papirus")
+        self.assertEqual(b.percent_setting().get(), "true")
+
     def test_restore_clears_everything(self):
-        self.make_theme("base")
-        self.alle_themes()
         b.save_config(dict(b.DEFAULTS, discharging=True))
-        self.set_theme(b.theme_name("base", "red"))
+        b.show_colour("red", None)
         rc, out, _ = self.run_cmd("restore")
         self.assertEqual(rc, 0)
-        self.assertIn("3 colour theme(s)", out)
-        self.assertIn("icon copies removed", out)
-        self.assertEqual(b.Setting().get(), "base")
+        self.assertIn("Shipped state", out)
+        self.assertEqual(self.shown(), (None, None))
         self.assertFalse(os.path.exists(b.CONFIG))
         self.assertEqual(b.load_config(), b.DEFAULTS)
 
@@ -1243,26 +909,25 @@ class TheLoop(Base):
 
     def setUp(self):
         super().setUp()
-        self.make_theme("base")
         self.battery(ampere=1.2, volt=4.3)          # 5.16 W -> amber
         # The daemon reads the config, and after an install that config says
         # "colour nothing". Every test below is about what happens once
         # somebody has switched the colours on.
         b.save_config(self.cfg_on())
-        self.d = b.Daemon(current="base")
+        self.d = b.Daemon()
 
     def test_the_first_colour_comes_at_once(self):
         self.assertTrue(self.d.tick(now=1000))
         self.assertEqual(self.d.showing[0], "amber")
-        self.assertEqual(b.Setting().get(), b.theme_name("base", "amber"))
+        self.assertEqual(self.shown(), ("amber", None))
 
     def test_the_same_colour_writes_nothing(self):
         self.d.tick(now=1000)
         self.assertFalse(self.d.tick(now=2000))
 
     def test_the_dwell_time_holds_the_colour(self):
-        """Every change restyles every GTK3 app, so a colour has to be worth
-        it: under dwell_s the new one waits."""
+        """A battery that blinks between two colours says nothing, so a
+        colour has to be worth it: under dwell_s the new one waits."""
         self.d.tick(now=1000)
         # Big enough that the median of the window crosses the threshold even
         # after hysteresis - otherwise this test passes because the colour did
@@ -1270,7 +935,7 @@ class TheLoop(Base):
         self.battery(ampere=3.0, volt=4.3)          # 12.9 W -> green
         self.assertFalse(self.d.tick(now=1010))
         self.assertEqual(self.d.showing[0], "amber")
-        self.assertEqual(b.Setting().get(), b.theme_name("base", "amber"))
+        self.assertEqual(self.shown(), ("amber", None))
         self.assertTrue(self.d.tick(now=1100))
         self.assertEqual(self.d.showing[0], "green")
 
@@ -1301,16 +966,17 @@ class TheLoop(Base):
         self.battery(status="Discharging", ampere=0.5, volt=3.9)   # 1.95 W
         self.assertTrue(self.d.tick(now=1100))
         self.assertIsNone(self.d.showing[0])
-        self.assertEqual(b.Setting().get(), "base")
+        self.assertEqual(self.shown(), (None, None))
+        self.assertFalse(os.path.exists(b.COLOUR_STATE))
 
     def test_full_takes_the_colour_away(self):
         self.d.tick(now=1000)
         self.battery(status="Full", ampere=0.0, volt=4.4)
         self.assertTrue(self.d.tick(now=1100))
-        self.assertEqual(b.Setting().get(), "base")
+        self.assertEqual(self.shown(), (None, None))
 
     def test_an_unreadable_battery_leaves_the_colour_at_first(self):
-        """A single failed read must not restyle every app on the phone."""
+        """A single failed read must not take a colour away."""
         self.d.tick(now=1000)
         os.unlink(os.path.join(self.sysfs, "current_now"))
         self.assertFalse(self.d.tick(now=1030))
@@ -1322,63 +988,55 @@ class TheLoop(Base):
         os.unlink(os.path.join(self.sysfs, "current_now"))
         self.assertTrue(self.d.tick(now=1000 + b.DEFAULTS["window_s"] + 1))
         self.assertIsNone(self.d.showing[0])
-        self.assertEqual(b.Setting().get(), "base")
-
-    def test_a_new_theme_of_the_users_is_adopted(self):
-        self.d.tick(now=1000)
-        self.make_theme("anderes")
-        self.set_theme("anderes")
-        self.d.tick(now=1100)
-        self.assertEqual(self.d.base, "anderes")
-        self.assertEqual(b.Setting().get(), b.theme_name("anderes", "amber"))
-        # Written when it is needed, not all twelve up front: twelve
-        # directories in ~/.themes are twelve entries in a theme chooser.
-        self.assertTrue(os.path.isdir(os.path.join(self.themes,
-                                                   b.theme_name("anderes", "amber"))))
-        self.assertFalse(os.path.isdir(os.path.join(self.themes,
-                                                    b.theme_name("anderes", "green"))))
-
-    def test_our_own_colour_is_not_a_new_theme(self):
-        self.d.tick(now=1000)
-        self.assertFalse(self.d.adopt(b.theme_name("base", "green")))
-        self.assertEqual(self.d.base, "base")
+        self.assertEqual(self.shown(), (None, None))
 
     def test_adopts_a_colour_from_an_earlier_run(self):
-        """After a crash the theme is still green. A fresh daemon has to
+        """After a crash the file still says green. A fresh daemon has to
         start from what is on screen, or dwell and hysteresis both count from
         a colour nobody is looking at."""
-        self.set_theme(b.theme_name("base", "green"))
-        d = b.Daemon(current=b.theme_name("base", "green"))
+        b.show_colour("green", None)
+        d = b.Daemon()
+        self.assertEqual(d.showing, ("green", None))
         # 6.67 W: under the 7 W that buys green, inside the tenth that keeps
         # it. A daemon that did not adopt what is on screen would read this
-        # as amber and restyle the whole phone for nothing.
+        # as amber.
         self.battery(ampere=1.55, volt=4.3)
         self.assertFalse(d.tick(now=1000))
-        self.assertEqual(d.showing[0], "green")
-        self.assertEqual(b.Setting().get(), b.theme_name("base", "green"))
+        self.assertEqual(self.shown(), ("green", None))
         # And it really is hysteresis, not a colour that can never leave.
         self.battery(ampere=1.2, volt=4.3)          # 5.16 W
         self.assertTrue(d.tick(now=1100))
         self.assertEqual(d.showing[0], "amber")
 
-    def test_without_a_usable_theme_nothing_happens(self):
-        self.set_theme("does-not-exist")
-        d = b.Daemon(current="does-not-exist")
-        self.assertFalse(b.can_theme(d.base))
-        self.assertFalse(d.tick(now=1000))
+    def test_the_file_says_what_the_widget_needs_and_nothing_else(self):
+        """Two words per line, a half and a colour - the widget builds the
+        stylesheet itself and refuses anything else."""
+        self.assertTrue(self.d.apply(("green", "red"), now=1000))
+        with open(b.COLOUR_STATE) as fh:
+            self.assertEqual(fh.read(), "frame %s\nfill %s\n"
+                             % (b.COLORS["green"], b.COLORS["red"]))
+        b.show_colour(None, "amber")
+        with open(b.COLOUR_STATE) as fh:
+            self.assertEqual(fh.read(), "fill %s\n" % b.COLORS["amber"])
 
-    def test_a_colour_without_a_theme_is_not_set(self):
-        """apply() builds the themes if they are missing - and gives up
-        quietly when the base theme cannot carry them."""
-        self.set_theme("does-not-exist")
-        d = b.Daemon(current="does-not-exist")
-        self.assertFalse(d.apply(("green", None), now=1000))
-        self.assertIsNone(d.showing[0])
-
-    def test_a_theme_is_built_when_needed(self):
-        d = b.Daemon(current="base")
-        self.assertTrue(d.apply(("green", None), now=1000))
-        self.assertEqual(b.Setting().get(), b.theme_name("base", "green"))
+    def test_the_daemon_touches_no_desktop_setting(self):
+        """What 24.9.2026 was about: colouring the icon changed gtk-theme,
+        and with it the accent colour of the quick settings and the dark
+        mode of Flatpak apps. The loop writes one file and nothing else."""
+        self.set_theme("adw-gtk3")
+        with open(self.icon_setting, "w") as fh:
+            fh.write("Adwaita\n")
+        self.d.cfg["discharging"] = True
+        for t, (status, ampere) in enumerate([("Charging", 1.2),
+                                              ("Charging", 3.0),
+                                              ("Discharging", 1.6)]):
+            self.battery(status=status, ampere=ampere, volt=4.0, percent=12)
+            self.d.tick(now=1000 + 100 * t)
+        self.assertEqual(b.Setting().get(), "adw-gtk3")
+        self.assertEqual(b.icon_setting().get(), "Adwaita")
+        self.assertEqual(b.percent_setting().get(), "true")
+        self.assertEqual(os.listdir(self.themes), [])
+        self.assertFalse(os.path.exists(self.icon_root))
 
     def test_a_changed_config_takes_effect_without_a_restart(self):
         """The app writes the config file; a daemon that read it once would
@@ -1393,42 +1051,40 @@ class TheLoop(Base):
 
     def test_an_unchanged_config_is_not_reread(self):
         b.save_config(dict(b.DEFAULTS, charge_green_w=9.0))
-        d = b.Daemon(current="base")
+        d = b.Daemon()
         self.assertFalse(d.reload())
         self.assertEqual(d.cfg["charge_green_w"], 9.0)
 
     def test_a_deleted_config_falls_back_to_defaults(self):
         b.save_config(dict(b.DEFAULTS, charge_green_w=9.0))
-        d = b.Daemon(current="base")
+        d = b.Daemon()
         os.unlink(b.CONFIG)
         self.assertTrue(d.reload())
         self.assertEqual(d.cfg["charge_green_w"], 7.0)
 
     def test_the_filling_does_not_switch_the_shell_with_it(self):
-        """One theme carries both halves, so a level crossing 60 % is one
-        switch - and it must not be read as a change of the shell."""
+        """One file carries both halves, so a level crossing 60 % is one
+        write - and it must not be read as a change of the shell."""
         self.battery(ampere=1.2, volt=4.3, percent=80)     # 5.16 W: amber
         self.d.tick(now=1000)
         self.assertEqual(self.d.showing, ("amber", None))
         self.battery(ampere=1.2, volt=4.3, percent=50)
         self.assertTrue(self.d.tick(now=1100))
         self.assertEqual(self.d.showing, ("amber", "amber"))
-        self.assertEqual(b.Setting().get(),
-                         b.theme_name("base", "amber", "amber"))
+        self.assertEqual(self.shown(), ("amber", "amber"))
 
     def test_the_filling_colours_even_without_a_shell(self):
         """On battery with an ordinary drain the shell says nothing - the
         filling still says the battery is nearly empty.
 
-        With an icon that has two areas - either one of the three Adwaita
-        draws that way itself, or one of our own copies. The single-shape
-        case is the test below.
+        With an icon that has two areas - one of the three Adwaita draws
+        that way itself. The single-shape case is the test below.
         """
         self.icon_with_two_areas("battery-level-10-symbolic")
         self.battery(status="Discharging", ampere=0.2, volt=3.9, percent=8)
         self.assertTrue(self.d.tick(now=1000))
         self.assertEqual(self.d.showing, (None, "red"))
-        self.assertEqual(b.Setting().get(), b.theme_name("base", None, "red"))
+        self.assertEqual(self.shown(), (None, "red"))
 
     def test_an_icon_of_one_piece_gets_one_colour(self):
         """The plain discharge icon is a single path, so colouring shell and
@@ -1464,11 +1120,11 @@ class TheLoop(Base):
         self.battery(status="Charging", ampere=0.2, volt=4.3, percent=85)
         self.assertFalse(self.d.tick(now=1000))
         self.assertEqual(self.d.showing, (None, None))
-        self.assertEqual(b.Setting().get(), "base")
+        self.assertEqual(self.shown(), (None, None))
 
     def test_a_wobbling_direction_leaves_the_shell_plain(self):
         """A worn USB port flips between charging and discharging every few
-        minutes. Following that would restyle every GTK3 app about once a
+        minutes. Following that would change the colour about once a
         minute for something the cable is doing."""
         self.d.cfg["discharging"] = True
         self.battery(status="Charging", ampere=1.2, volt=4.3, percent=80)
@@ -1504,47 +1160,73 @@ class TheLoop(Base):
         self.d.tick(now=1050)
         self.assertEqual(self.d.showing[1], "red")
 
-    def test_while_charging_the_bolt_takes_the_power_colour(self):
-        """Asked for: on a charging icon only the bolt says how fast, and
-        the frame stays in the colour of the bar."""
-        # One file, both areas - the second helper would overwrite the
-        # first and take the bolt away again.
-        self.icon_with_bolt("battery-level-80-charging-symbolic")
-        self.battery(ampere=1.2, volt=4.3, percent=80)      # 5.16 W: amber
-        self.d.tick(now=1000)
-        self.assertEqual(self.d.kind, "c")
-        self.assertTrue(b.Setting().get().endswith("-amber-none-c"))
-        rule = open(os.path.join(self.themes, b.Setting().get(),
-                                 "gtk-3.0", "gtk.css")).read()
-        self.assertNotIn("  color:", rule)
-        self.assertIn("warning %s" % b.COLORS["amber"], rule)
-
-    def test_without_a_bolt_of_its_own_the_frame_takes_it(self):
-        """Where our icon theme is not in use there is nothing to colour
-        but the frame - and one colour is better than none."""
-        self.icon_with_two_areas("battery-level-80-charging-symbolic")
-        self.battery(ampere=1.2, volt=4.3, percent=80)
-        self.d.tick(now=1000)
-        self.assertEqual(self.d.kind, "d")
-        self.assertTrue(b.Setting().get().endswith("-amber-none-d"))
-
-    def test_on_battery_the_frame_takes_it(self):
-        self.d.cfg["discharging"] = True
-        self.icon_with_two_areas("battery-level-80-symbolic")
-        self.battery(status="Discharging", ampere=1.6, volt=3.9, percent=80)
-        self.d.tick(now=1000)
-        self.assertEqual(self.d.kind, "d")
-        rule = open(os.path.join(self.themes, b.Setting().get(),
-                                 "gtk-3.0", "gtk.css")).read()
-        self.assertIn("  color: %s" % b.COLORS["red"], rule)
-
-    def test_setting_can_fail(self):
-        class Stur(b.Setting):
-            def set(self, name):
-                return False
-        d = b.Daemon(setting=Stur(self.setting), current="base")
+    def test_a_file_that_cannot_be_written_changes_nothing(self):
+        d = b.Daemon(colour_path=os.path.join(b.CONFIG, "not-a-directory",
+                                              "furios-battery-color"))
+        b.save_config(self.cfg_on())
         self.assertFalse(d.tick(now=1000))
         self.assertIsNone(d.showing[0])
+
+
+class Leftovers(Base):
+    """What versions before 24.9.2026 left on a phone, and putting it back.
+
+    They coloured the icon by switching gtk-theme and icon-theme to names of
+    their own and emptied phosh's percentage through the theme. `reset` -
+    which the service runs on every stop - and the daemon's start put back
+    exactly that, and nothing that is not recognisably ours.
+    """
+
+    def test_an_old_theme_name_goes_back_to_the_users_own(self):
+        self.set_theme(self.old_theme("adw-gtk3", "amber", "red"))
+        self.assertTrue(b.clean_up_leftovers())
+        self.assertEqual(b.Setting().get(), "adw-gtk3")
+
+    def test_and_the_directories_go_with_it(self):
+        self.old_theme("adw-gtk3", "green")
+        self.old_theme("adw-gtk3", None, "red")
+        b.clean_up_leftovers()
+        self.assertEqual(os.listdir(self.themes), [])
+
+    def test_a_directory_of_that_name_that_is_not_ours_stays(self):
+        name = self.old_theme("adw-gtk3", "green")
+        with open(os.path.join(self.themes, name, "gtk-3.0", "gtk.css"),
+                  "w") as fh:
+            fh.write("/* somebody's own */\n")
+        b.clean_up_leftovers()
+        self.assertEqual(os.listdir(self.themes), [name])
+
+    def test_the_old_icon_theme_gives_the_setting_back_first(self):
+        name = self.old_icon_theme(inherits="Papirus")
+        with open(self.icon_setting, "w") as fh:
+            fh.write(name + "\n")
+        self.assertTrue(b.clean_up_leftovers())
+        self.assertEqual(b.icon_setting().get(), "Papirus")
+        self.assertFalse(os.path.exists(os.path.join(self.icon_root, name)))
+
+    def test_an_old_icon_theme_not_in_use_just_goes(self):
+        name = self.old_icon_theme()
+        b.clean_up_leftovers()
+        self.assertEqual(b.icon_setting().get(), "Adwaita")
+        self.assertFalse(os.path.exists(os.path.join(self.icon_root, name)))
+
+    def test_the_percentage_goes_back_to_what_it_was(self):
+        b.save_state({"percent_was": "false"})
+        self.assertTrue(b.clean_up_leftovers())
+        self.assertEqual(b.percent_setting().get(), "false")
+        self.assertNotIn("percent_was", b.load_state())
+
+    def test_a_phone_without_leftovers_is_not_touched(self):
+        self.set_theme("adw-gtk3")
+        self.assertFalse(b.clean_up_leftovers())
+        self.assertEqual(b.Setting().get(), "adw-gtk3")
+        self.assertEqual(b.icon_setting().get(), "Adwaita")
+        self.assertEqual(b.percent_setting().get(), "true")
+
+    def test_reset_does_it_too(self):
+        self.set_theme(self.old_theme("adw-gtk3", "red"))
+        self.assertEqual(self.run_cmd("reset")[0], 0)
+        self.assertEqual(b.Setting().get(), "adw-gtk3")
 
 
 class NothingIsOnAfterAnInstall(Base):
@@ -1567,12 +1249,11 @@ class NothingIsOnAfterAnInstall(Base):
         self.assertIsNone(b.wanted_bucket(b.read_battery(), cfg))
         self.assertIsNone(b.wanted_level(b.read_battery(), cfg))
 
-    def test_a_fresh_daemon_writes_no_theme(self):
-        self.make_theme("base")
+    def test_a_fresh_daemon_writes_no_colour(self):
         self.battery(ampere=1.9, volt=4.2)
-        daemon = b.Daemon(current="base")
+        daemon = b.Daemon()
         self.assertFalse(daemon.tick(now=1000))
-        self.assertEqual(b.Setting().get(), "base")
+        self.assertFalse(os.path.exists(b.COLOUR_STATE))
 
 
 class TheTimeLeft(Base):
@@ -1631,16 +1312,6 @@ class TheTimeLeft(Base):
         self.assertEqual(b.format_runtime(12.25), "12:15")
         self.assertIsNone(b.format_runtime(None))
 
-    def test_the_spot_is_never_empty(self):
-        """What replaced the percentage falls back to the percentage. A
-        blank where a number used to be reads as a fault, and a full
-        battery is not a fault."""
-        self.assertEqual(b.runtime_label({"percent": 48.0}, "05:33"), "05:33")
-        self.assertEqual(b.runtime_label({"percent": 48.0}, None), "48%")
-        self.assertEqual(b.runtime_label({"percent": None}, None), "")
-        self.assertEqual(b.runtime_label(None, None), "")
-
-
 class TheTimeInTheLoop(Base):
     """The daemon's half: smoothing, and which samples count."""
 
@@ -1648,9 +1319,8 @@ class TheTimeInTheLoop(Base):
 
     def setUp(self):
         super().setUp()
-        self.make_theme("base")
         b.save_config(self.cfg_on(runtime=True))
-        self.d = b.Daemon(current="base")
+        self.d = b.Daemon()
 
     def test_upower_is_preferred_to_our_own_arithmetic(self):
         """The whole point of asking it: measured on 16.9.2026 with a socket
@@ -1660,7 +1330,7 @@ class TheTimeInTheLoop(Base):
         self.battery(status="Charging", ampere=0.065, avg=65000,
                      charge=self.HAVE, full=self.FULL)
         b.save_config(self.cfg_on(runtime=True, charge_time=True))
-        self.d = b.Daemon(current="base")
+        self.d = b.Daemon()
         self.d.tick(now=1000)
         # Ours, on its own, is 35 hours - over the ceiling, so it says
         # nothing at all and the bar keeps the percentage.
@@ -1688,7 +1358,7 @@ class TheTimeInTheLoop(Base):
         self.battery(status="Charging", ampere=1.5, avg=1500000,
                      charge=self.HAVE, full=self.FULL)
         b.save_config(self.cfg_on(runtime=True, charge_time=True))
-        self.d = b.Daemon(current="base")
+        self.d = b.Daemon()
         self.d.time_to_full = 3600
         self.d.tick(now=1000)
         self.assertEqual(self.d.runtime(), "01:00")
@@ -1782,217 +1452,6 @@ class TheTimeInTheLoop(Base):
         self.assertIsNone(self.d.last_reading)
 
 
-class ThePercentage(Base):
-    """Holding phosh's percentage slot, and giving it back.
-
-    Note which way round this goes. The time stands exactly where the
-    percentage stood, and that place only exists while phosh is still
-    laying the percentage out - so the setting has to be ON, and the text
-    is emptied by the theme instead. Switching the key off frees the space
-    and phosh moves the battery icon into it, which was measured: the icon
-    goes from 613..631 to 666..683 on this 720 px screen, leaving nothing
-    to its right but 36 px of phosh's own padding.
-    """
-
-    def percentage(self):
-        return b.percent_setting().get()
-
-    def test_claiming_the_space_remembers_what_the_setting_was(self):
-        b.percent_setting().set("false")
-        self.assertTrue(b.claim_percentage_space())
-        self.assertEqual(self.percentage(), "true")
-        self.assertEqual(b.load_state()["percent_was"], "false")
-
-    def test_the_usual_case_changes_nothing(self):
-        """On is the default, so most phones see no change at all - the
-        setting is already what we need."""
-        self.assertTrue(b.claim_percentage_space())
-        self.assertEqual(self.percentage(), "true")
-
-    def test_releasing_puts_back_what_was_found(self):
-        b.percent_setting().set("false")
-        b.claim_percentage_space()
-        self.assertTrue(b.release_percentage_space())
-        self.assertEqual(self.percentage(), "false")
-        self.assertNotIn("percent_was", b.load_state())
-
-    def test_somebody_who_had_it_on_keeps_it_on(self):
-        b.claim_percentage_space()
-        b.release_percentage_space()
-        self.assertEqual(self.percentage(), "true")
-
-    def test_releasing_twice_is_harmless(self):
-        """It is called from three places that can all happen: the daemon on
-        SIGTERM, `reset` from ExecStopPost after a kill -9, and `restore`
-        from the app."""
-        b.percent_setting().set("false")
-        b.claim_percentage_space()
-        b.release_percentage_space()
-        b.percent_setting().set("true")             # somebody else, later
-        b.release_percentage_space()
-        self.assertEqual(self.percentage(), "true")
-
-    def test_a_restart_while_we_hold_it_does_not_forget(self):
-        """The daemon comes back, sees "true" - which is our own doing - and
-        must not write that down as what the user had."""
-        b.percent_setting().set("false")
-        b.claim_percentage_space()
-        b.claim_percentage_space()
-        b.release_percentage_space()
-        self.assertEqual(self.percentage(), "false")
-
-    def test_switching_it_off_by_hand_outranks_us(self):
-        b.percent_setting().set("false")
-        b.claim_percentage_space()
-        b.percent_setting().set("false")            # the user, by hand
-        b.release_percentage_space()
-        self.assertEqual(self.percentage(), "false")
-
-    def test_reset_puts_it_back(self):
-        """This is what ExecStopPost runs, so it is also the answer to a
-        kill -9."""
-        b.percent_setting().set("false")
-        b.claim_percentage_space()
-        self.assertEqual(b.cmd_reset([]), 0)
-        self.assertEqual(self.percentage(), "false")
-
-    def test_restore_leaves_no_state_behind(self):
-        b.claim_percentage_space()
-        b.save_config(self.cfg_on(runtime=True))
-        b.cmd_restore([])
-        self.assertFalse(os.path.exists(b.STATE))
-        self.assertFalse(os.path.exists(b.CONFIG))
-
-    def test_it_is_the_same_key_the_settings_app_shows(self):
-        """phosh-mobile-settings has this switch under Top Bar ("Show
-        battery percentage"), bound to the same gsettings key. Pinned so
-        nobody moves ours to a private key of its own, where the phone would
-        say one thing and its settings another."""
-        self.assertEqual(
-            "org.gnome.desktop.interface show-battery-percentage",
-            b.PERCENT_SETTING)
-
-    def test_reading_whether_somebody_switched_it_off(self):
-        self.assertFalse(b.percentage_switched_off())
-        b.percent_setting().set("false")
-        self.assertTrue(b.percentage_switched_off())
-
-    def test_the_option_is_a_switch_like_the_others(self):
-        self.assertEqual(self.run_cmd("config", "runtime", "on")[0], 0)
-        self.assertIs(b.load_config()["runtime"], True)
-        self.assertEqual(self.run_cmd("config", "runtime", "off")[0], 0)
-        self.assertIs(b.load_config()["runtime"], False)
-        self.assertEqual(self.run_cmd("config", "runtime", "maybe")[0], 2)
-
-
-class EmptyingTheLabel(Base):
-    """The rule that empties phosh's percentage without freeing its place.
-
-    A theme is the only thing on this phone that reaches into the running
-    shell, which is why a stylesheet carries something that is not a colour.
-    """
-
-    def test_the_rule_is_in_the_stylesheet_when_asked_for(self):
-        rule = b.css_rule(percent=True)
-        self.assertIn("phosh-battery-info label", rule)
-        self.assertIn("color: transparent", rule)
-
-    def test_all_three_declarations_are_there(self):
-        """Each does a different job: the text goes, its own width stops
-        deciding the slot, and the slot gets a width of its own. Drop the
-        middle one and 9 %, 48 % and 100 % reserve three different widths,
-        which moves the icons about under our clock; drop the last and the
-        slot is whatever the percentage happened to need.
-
-        The width itself is not pinned here - it is measured against the
-        font on the device and changes with it. What must not go missing is
-        that all three are said."""
-        rule = b.css_rule(percent=True)
-        for declaration in ("color: transparent", "font-size: 1px",
-                            "min-width:"):
-            self.assertIn(declaration, rule, declaration)
-
-    def test_without_it_the_stylesheet_is_only_colour(self):
-        self.assertNotIn("phosh-battery-info label",
-                         b.css_rule("green", "amber"))
-
-    def test_a_stylesheet_of_nothing_but_the_blanking(self):
-        """The case that has no colour at all: only the time is switched on.
-        There has to be a theme of ours even then, or there is nothing to
-        carry the rule."""
-        rule = b.css_rule(percent=True)
-        self.assertTrue(rule)
-        self.assertNotIn("-gtk-icon-palette", rule)
-
-    def test_the_name_says_which_it_is(self):
-        self.assertTrue(b.theme_name("base", percent=True).endswith("-p"))
-        self.assertFalse(b.theme_name("base").endswith("-p"))
-        self.assertTrue(b.blanks_percentage(b.theme_name("base", "green",
-                                                         percent=True)))
-        self.assertFalse(b.blanks_percentage(b.theme_name("base", "green")))
-        self.assertFalse(b.blanks_percentage("adw-gtk3"))
-
-    def test_the_users_own_theme_is_still_read_off_the_name(self):
-        """base_name has to see through the new suffix as well, or a restart
-        would build our theme on top of our theme."""
-        self.assertEqual(
-            "adw-gtk3",
-            b.base_name(b.theme_name("adw-gtk3", "green", "amber", "c", True)))
-
-    def test_it_is_written_and_switched_to_without_a_colour(self):
-        self.make_theme("base")
-        name = b.write_theme("base", percent=True)
-        self.assertTrue(name.endswith("-p"))
-        with open(os.path.join(self.themes, name, "gtk-3.0", "gtk.css")) as fh:
-            self.assertIn("phosh-battery-info label", fh.read())
-
-    def test_the_daemon_leaves_the_users_theme_when_nothing_is_wanted(self):
-        self.make_theme("base")
-        self.battery(status="Full", ampere=0.0, volt=4.3)
-        daemon = b.Daemon(current="base")
-        daemon.tick(now=1000)
-        self.assertEqual(b.Setting().get(), "base")
-
-    def test_the_daemon_switches_to_ours_for_the_blanking_alone(self):
-        """No colour to show and still a theme of ours, because the rule has
-        to live somewhere."""
-        self.make_theme("base")
-        self.battery(status="Full", ampere=0.0, volt=4.3)
-        daemon = b.Daemon(current="base")
-        daemon.blank_percent = True
-        self.assertTrue(daemon.apply((None, None), now=1000))
-        self.assertTrue(b.blanks_percentage(b.Setting().get()))
-        self.assertTrue(daemon.blank_showing)
-
-    def test_the_dwell_does_not_hold_back_the_blanking(self):
-        """45 seconds is there so a wobbling colour does not restyle every
-        app. Somebody throwing a switch is not a wobble - and waiting would
-        leave the percentage and the clock in the bar side by side."""
-        self.make_theme("base")
-        b.save_config(self.cfg_on())
-        self.battery(ampere=1.2, volt=4.3)
-        daemon = b.Daemon(current="base")
-        daemon.tick(now=1000)
-        daemon.blank_percent = True
-        self.assertTrue(daemon.apply(daemon.showing, now=1005))
-        self.assertTrue(b.blanks_percentage(b.Setting().get()))
-
-    def test_and_the_colour_still_waits_out_the_dwell(self):
-        self.make_theme("base")
-        b.save_config(self.cfg_on())
-        self.battery(ampere=1.2, volt=4.3)          # amber
-        daemon = b.Daemon(current="base")
-        daemon.tick(now=1000)
-        self.battery(ampere=3.0, volt=4.3)          # green
-        self.assertFalse(daemon.tick(now=1010))
-        self.assertEqual(daemon.showing[0], "amber")
-
-    def test_a_theme_of_ours_from_an_earlier_run_is_seen_through(self):
-        self.make_theme("base")
-        daemon = b.Daemon(current=b.theme_name("base", "green", percent=True))
-        self.assertEqual("base", daemon.base)
-
-
 class TwoQuestionsTwoSwitches(Base):
     """"How long does it last" and "how long until full" are not the same
     question, so they are not the same switch. What is not asked for falls
@@ -2031,38 +1490,33 @@ class TwoQuestionsTwoSwitches(Base):
             self.assertFalse(b.time_wanted(self.battery_on(status), cfg),
                              status)
 
-    def test_what_is_not_asked_for_shows_the_percentage(self):
-        """Not an empty spot: the strip stands where a number stood, and a
-        blank there reads as a fault."""
+    def test_what_is_not_asked_for_shows_no_time(self):
+        """Nothing in the widget: phosh's own percentage stands beside it
+        and is the reading."""
         self.battery(status="Charging", ampere=0.4, percent=48,
                      charge=self.HAVE, full=self.FULL)
         b.save_config(self.cfg_on(runtime=True, charge_time=False))
-        self.make_theme("base")
-        daemon = b.Daemon(current="base")
+        daemon = b.Daemon()
         daemon.tick(now=1000)
         self.assertIsNone(daemon.runtime())
-        self.assertEqual("48%",
-                         b.runtime_label(daemon.last_reading, daemon.runtime()))
 
     def test_and_what_is_asked_for_shows_the_time(self):
         self.battery(status="Charging", ampere=1.0, percent=48,
                      charge=self.HAVE, full=self.FULL)
         b.save_config(self.cfg_on(runtime=False, charge_time=True))
-        self.make_theme("base")
-        daemon = b.Daemon(current="base")
+        daemon = b.Daemon()
         daemon.tick(now=1000)
         self.assertEqual("02:16", daemon.runtime())
 
-    def test_either_switch_puts_the_strip_up(self):
-        """It does not come and go with the cable. Every coming and going
-        would restyle all GTK3 apps, and the bar would rearrange itself the
-        moment somebody plugs in."""
-        self.assertTrue(b.strip_wanted(self.cfg_on(runtime=True)))
-        self.assertTrue(b.strip_wanted(self.cfg_on(charge_time=True)))
-        self.assertTrue(b.strip_wanted(
-            self.cfg_on(runtime=True, charge_time=True)))
-        self.assertFalse(b.strip_wanted(
-            self.cfg_on(runtime=False, charge_time=False)))
+    def test_any_switch_puts_the_widget_in_the_bar(self):
+        """It shows the colour and the time, so each of the five puts it
+        there - and it does not come and go with the cable, or the bar
+        would rearrange itself the moment somebody plugs in."""
+        alles_aus = dict(b.DEFAULTS)
+        self.assertFalse(b.plugin_wanted(alles_aus))
+        for key in b.SCHALTER:
+            self.assertTrue(b.plugin_wanted(dict(alles_aus, **{key: True})),
+                            key)
 
     def test_the_charge_switch_is_off_after_an_install(self):
         self.assertIs(b.DEFAULTS["charge_time"], False)
@@ -2072,49 +1526,6 @@ class TwoQuestionsTwoSwitches(Base):
         self.assertIs(b.load_config()["charge_time"], True)
         self.assertEqual(self.run_cmd("config", "charge_time", "off")[0], 0)
         self.assertIs(b.load_config()["charge_time"], False)
-
-
-class WhoWinsOverThePercentage(Base):
-    """The strip stands in phosh's percentage slot, so it lives on that
-    setting being on.
-
-    Its own decision function because in the daemon it sits behind GTK and
-    a compositor, and this is the part worth being able to check: what
-    happens when somebody reaches for the switch in phosh-mobile-settings
-    while our strip is up.
-    """
-
-    def test_off_means_nothing_is_drawn(self):
-        self.assertEqual(b.strip_action(False, False, False, False), "idle")
-
-    def test_switching_the_option_on_puts_it_up(self):
-        self.assertEqual(b.strip_action(True, False, False, False), "up")
-
-    def test_while_it_is_up_it_only_gets_the_time(self):
-        self.assertEqual(b.strip_action(True, True, False, False), "hold")
-
-    def test_switching_the_option_off_takes_it_down(self):
-        self.assertEqual(b.strip_action(False, True, False, False), "down")
-
-    def test_switching_the_percentage_off_takes_our_place_with_it(self):
-        """Off, phosh stops laying the percentage out and the battery icon
-        moves into the freed space - measured, 613..631 becomes 666..683.
-        Our clock sits at a fixed distance from the edge, so carrying on
-        would draw it on top of the icon. That switch is a decision, so we
-        stand down."""
-        self.assertEqual(b.strip_action(True, True, True, False), "yield")
-
-    def test_and_we_do_not_claim_it_again_next_tick(self):
-        """The whole point of remembering: without it the next tick would
-        switch the percentage back on, and the switch in the settings app
-        would appear not to work."""
-        self.assertEqual(b.strip_action(True, False, False, True), "wait")
-
-    def test_the_option_going_off_clears_the_standing_down(self):
-        """Otherwise switching it off and on again would be a switch that
-        does nothing for the rest of the session."""
-        self.assertEqual(b.strip_action(False, False, False, True), "reset")
-        self.assertEqual(b.strip_action(True, False, False, False), "up")
 
 
 class UPowerTime(unittest.TestCase):
@@ -2339,12 +1750,12 @@ class TheIconInTheBar(Base):
 
     def test_it_says_which_way_the_time_is_shown(self):
         self.plugin_file(when=1000.0)
-        self.assertIn("status icon",
+        self.assertIn("the widget in phosh's bar",
                       b.time_shown_as(proc=self.fake_proc(2000.0)))
 
     def test_and_what_to_do_when_it_is_not_installed(self):
         words = b.time_shown_as(proc=self.fake_proc(2000.0))
-        self.assertIn("strip", words)
+        self.assertIn("not installed", words)
         self.assertIn("Install", words)
 
     def test_and_that_a_reboot_is_all_that_is_missing(self):

@@ -186,6 +186,56 @@ write_file (const char *path, const char *text, gsize len)
 }
 
 
+/* The first image inside a status icon - the one phosh draws the battery
+   with. Borrowed. */
+static GtkWidget *
+image_of (GtkWidget *icon)
+{
+  GtkWidget *box = gtk_bin_get_child (GTK_BIN (icon));
+  GList *children;
+  GtkWidget *image = NULL;
+
+  if (!GTK_IS_CONTAINER (box))
+    return NULL;
+  children = gtk_container_get_children (GTK_CONTAINER (box));
+  for (GList *l = children; l && image == NULL; l = l->next) {
+    if (GTK_IS_IMAGE (l->data))
+      image = l->data;
+  }
+  g_list_free (children);
+
+  return image;
+}
+
+
+static void
+colour_of (GtkWidget *widget, GdkRGBA *rgba)
+{
+  GtkStyleContext *context = gtk_widget_get_style_context (widget);
+
+  gtk_style_context_get_color (context, gtk_style_context_get_state (context), rgba);
+}
+
+
+/* Like settles_to, for the colour an image is drawn in. */
+static gboolean
+colour_settles_to (GtkWidget *image, const GdkRGBA *want)
+{
+  gint64 deadline = g_get_monotonic_time () + 2 * G_USEC_PER_SEC;
+
+  while (g_get_monotonic_time () < deadline) {
+    GdkRGBA have;
+
+    colour_of (image, &have);
+    if (gdk_rgba_equal (&have, want))
+      return TRUE;
+    g_main_context_iteration (NULL, FALSE);
+    g_usleep (10 * 1000);
+  }
+  return FALSE;
+}
+
+
 /*
  * phosh's own rule for the indicator box, as its common.css has it:
  *
@@ -264,6 +314,9 @@ main (int argc, char *argv[])
 {
   g_autofree char *runtime_dir = NULL;
   g_autofree char *state = NULL;
+  g_autofree char *colour = NULL;
+  GtkWidget *battery_image, *other_image;
+  GdkRGBA plain, red;
   GIOExtensionPoint *ep;
   GIOExtension *extension;
   GtkWidget *widget, *box, *battery, *other;
@@ -283,6 +336,7 @@ main (int argc, char *argv[])
   runtime_dir = g_dir_make_tmp ("battery-time-test-XXXXXX", NULL);
   g_setenv ("XDG_RUNTIME_DIR", runtime_dir, TRUE);
   state = g_build_filename (runtime_dir, "furios-battery-time", NULL);
+  colour = g_build_filename (runtime_dir, "furios-battery-color", NULL);
 
   if (!gtk_init_check (&argc, &argv)) {
     g_print ("  \033[33mskipped\033[0m - no display to build a GTK widget on\n");
@@ -391,12 +445,59 @@ main (int argc, char *argv[])
   check_true ("the file going away takes the time with it",
               settles_to (widget, NULL, FALSE));
 
+  /* The colour. What is checked is the frame, through `color`, because that
+     is what GTK will answer about; the palette for the level inside is
+     built by the same code from the same line and is looked at on the
+     phone. */
+  battery_image = image_of (battery);
+  other_image = image_of (other);
+  check_true ("the battery has an image to colour", battery_image != NULL);
+  check_true ("and so does the other icon", other_image != NULL);
+  colour_of (battery_image, &plain);
+  gdk_rgba_parse (&red, "#e01b24");
+
+  write_file (colour, "frame #e01b24\nfill #2ec27e\n", 27);
+  check_true ("the battery takes the colour of the file, with no time shown",
+              colour_settles_to (battery_image, &red));
+  {
+    GdkRGBA have;
+    colour_of (other_image, &have);
+    check_true ("and no other icon does", gdk_rgba_equal (&have, &plain));
+    colour_of (GTK_WIDGET (label_of (widget)), &have);
+    check_true ("not even our own label", !gdk_rgba_equal (&have, &red));
+  }
+
+  write_file (colour, "frame red; } * { color: red\n", 29);
+  check_true ("a line that is not a colour is not CSS - no colour at all",
+              colour_settles_to (battery_image, &plain));
+
+  write_file (colour, "frame #e01b24\n", 14);
+  check_true ("and the colour comes back", colour_settles_to (battery_image, &red));
+
+  write_file (colour, "fill #2ec27e\n", 13);
+  check_true ("the level alone leaves the frame in the bar's own colour",
+              colour_settles_to (battery_image, &plain));
+
+  write_file (colour, "frame #e01b24\n", 14);
+  colour_settles_to (battery_image, &red);
+  g_remove (colour);
+  check_true ("the file going away takes the colour with it",
+              colour_settles_to (battery_image, &plain));
+
+  write_file (colour, "frame #e01b24\n", 14);
+  colour_settles_to (battery_image, &red);
+
   /* Switched off, or the panel torn down: the shell must be left as we
      found it. */
   gtk_widget_destroy (widget);
   g_object_unref (widget);
   check_int ("and when it goes, the battery has its priority back",
              priority_of (battery), DEFAULT_PRIORITY);
+  {
+    GdkRGBA have;
+    colour_of (battery_image, &have);
+    check_true ("and its own colour", gdk_rgba_equal (&have, &plain));
+  }
   g_object_unref (box);
 
   g_print ("\n");

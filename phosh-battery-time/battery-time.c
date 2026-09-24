@@ -12,7 +12,7 @@
  * INSIDE phosh's own indicator box, so it is drawn wherever that box is,
  * lock screen included.
  *
- * Two things follow from being in that box, and both cost code:
+ * Three things follow from being in that box, and all of them cost code:
  *
  *   WHERE it stands. The box sorts status icons by priority and puts
  *   everything else - a plain label, which is what this was - at the very
@@ -27,7 +27,18 @@
  *   the 16px clock instead - and next to the battery it belongs to, that
  *   read as a second clock rather than as part of the reading.
  *
- * This runs in phosh's process. So: it reads one small file, it believes
+ *   WHAT COLOUR the battery beside it is. battctl decides the colour and
+ *   writes it into a second small file; this widget puts it on the battery
+ *   icon's image, through a stylesheet added to that one image's style
+ *   context and to nothing else. Until 24.9.2026 battctl did this by
+ *   switching the desktop's gtk-theme to generated themes of its own, and
+ *   that broke two things it had no business touching: phosh applies the
+ *   accent colour only to the themes it knows by name (Adwaita, adw-gtk3
+ *   and their -dark forms), so the quick settings fell back to blue, and
+ *   Flatpak apps that did not know the name lost their dark mode. Nothing
+ *   here reads or writes a setting.
+ *
+ * This runs in phosh's process. So: it reads two small files, it believes
  * nothing about it, and it does nothing else. Every failure is "show
  * nothing" - a shell that dies because a battery reading was odd would be
  * a far worse bargain than a missing number.
@@ -40,6 +51,15 @@
 /* Long enough for "100:00" and a newline, short enough that a file which is
    not ours cannot become a label. */
 #define MAX_LEN 16
+
+/* "frame #rrggbb" and "fill #rrggbb", a line each, and nothing else. */
+#define MAX_COLOUR_LEN 64
+#define COLOUR_FILE "furios-battery-color"
+
+/* Above the application's own stylesheets, so a rule of phosh's for the
+   battery image at the same priority cannot win on specificity alone. It
+   only ever reaches the battery's image - see colour_the_battery(). */
+#define COLOUR_PRIORITY (GTK_STYLE_PROVIDER_PRIORITY_APPLICATION + 1)
 
 /*
  * The one symbol we borrow from the shell.
@@ -93,7 +113,13 @@ GType phosh_status_icon_get_type (void);
 typedef struct {
   GtkWidget    *label;
   GFile        *file;
+  GFile        *colour_file;
   GFileMonitor *monitor;
+
+  /* The colour, and the battery images it is attached to - held, so it can
+     be taken off them again when this widget goes. */
+  GtkCssProvider *provider;
+  GPtrArray      *coloured;
 
   /* The shell's battery icon, while we have its priority turned down, and
      the value to give back. NULL until we have found it - and after, if
@@ -105,14 +131,14 @@ typedef struct {
 
 
 static char *
-state_path (void)
+state_path (const char *name)
 {
   const char *run = g_get_user_runtime_dir ();
 
   /* The runtime directory: it is this user's, it is a tmpfs, and it is
-     emptied when the session ends - so a stale time from yesterday cannot
-     be sitting there when the shell starts. */
-  return g_build_filename (run, "furios-battery-time", NULL);
+     emptied when the session ends - so a stale time or colour from
+     yesterday cannot be sitting there when the shell starts. */
+  return g_build_filename (run, name, NULL);
 }
 
 
@@ -160,13 +186,33 @@ give_the_battery_its_priority_back (FuriosBatteryTimeData *data)
 }
 
 
+/* Take our stylesheet off the battery again. Same reasoning as the
+   priority: the shell is left as we found it. */
+static void
+uncolour_the_battery (FuriosBatteryTimeData *data)
+{
+  if (data->coloured == NULL)
+    return;
+
+  for (guint i = 0; i < data->coloured->len; i++) {
+    GtkWidget *image = g_ptr_array_index (data->coloured, i);
+
+    gtk_style_context_remove_provider (gtk_widget_get_style_context (image),
+                                       GTK_STYLE_PROVIDER (data->provider));
+  }
+  g_ptr_array_set_size (data->coloured, 0);
+}
+
+
 static void
 on_destroy (GtkWidget *self)
 {
   FuriosBatteryTimeData *data = get_data (self);
 
-  if (data)
+  if (data) {
     give_the_battery_its_priority_back (data);
+    uncolour_the_battery (data);
+  }
 }
 
 
@@ -176,7 +222,11 @@ data_free (gpointer user_data)
   FuriosBatteryTimeData *data = user_data;
 
   give_the_battery_its_priority_back (data);
+  uncolour_the_battery (data);
+  g_clear_pointer (&data->coloured, g_ptr_array_unref);
+  g_clear_object (&data->provider);
   g_clear_object (&data->monitor);
+  g_clear_object (&data->colour_file);
   g_clear_object (&data->file);
   g_free (data);
 }
@@ -217,6 +267,144 @@ look_at_child (GtkWidget *child, gpointer user_data)
 }
 
 
+/* The images inside a status icon: its bin holds a box, and the box holds
+   the image and the extra widget. The caller frees the list, not the
+   widgets in it. */
+static GList *
+images_of (GtkWidget *icon)
+{
+  GtkWidget *box = GTK_IS_BIN (icon) ? gtk_bin_get_child (GTK_BIN (icon)) : NULL;
+  GList *children, *images = NULL;
+
+  if (!GTK_IS_CONTAINER (box))
+    return NULL;
+
+  children = gtk_container_get_children (GTK_CONTAINER (box));
+  for (GList *l = children; l; l = l->next) {
+    if (GTK_IS_IMAGE (l->data))
+      images = g_list_prepend (images, l->data);
+  }
+  g_list_free (children);
+
+  return g_list_reverse (images);
+}
+
+
+/* Our stylesheet on the battery's image, and on nothing else. A provider
+   added to one widget's style context reaches that widget alone - not its
+   neighbours, not the rest of the shell, not any other program. */
+static void
+colour_the_battery (FuriosBatteryTimeData *data, GObject *battery)
+{
+  GList *images;
+
+  if (!GTK_IS_WIDGET (battery))
+    return;
+
+  images = images_of (GTK_WIDGET (battery));
+  for (GList *l = images; l; l = l->next) {
+    gtk_style_context_add_provider (gtk_widget_get_style_context (l->data),
+                                    GTK_STYLE_PROVIDER (data->provider),
+                                    COLOUR_PRIORITY);
+    g_ptr_array_add (data->coloured, g_object_ref (l->data));
+  }
+  g_list_free (images);
+}
+
+
+static gboolean
+is_hex_colour (const char *text)
+{
+  if (strlen (text) != 7 || text[0] != '#')
+    return FALSE;
+  for (int i = 1; i < 7; i++) {
+    if (!g_ascii_isxdigit (text[i]))
+      return FALSE;
+  }
+  return TRUE;
+}
+
+
+/*
+ * The stylesheet for what the file says, or NULL if it says anything we do
+ * not understand. "" is a valid answer: no colour.
+ *
+ * The file is not taken as CSS. It holds names and colours, and the rule is
+ * built here, so nothing written into it can reach further than the two
+ * declarations below:
+ *
+ *   frame   the battery's outline (and on a charging icon the bolt, which
+ *           Adwaita draws in the same path) - `color`
+ *   fill    the level inside, which Adwaita draws with the symbolic
+ *           palette: success, and warning/error on the low-level icons
+ *
+ * A key that is absent is how "no colour" is said for that half.
+ */
+static char *
+colour_css (const char *text)
+{
+  g_auto (GStrv) lines = g_strsplit (text, "\n", -1);
+  g_autoptr (GString) css = g_string_new (NULL);
+  const char *frame = NULL, *fill = NULL;
+  g_auto (GStrv) words_frame = NULL, words_fill = NULL;
+
+  for (int i = 0; lines[i]; i++) {
+    g_auto (GStrv) words = NULL;
+
+    g_strstrip (lines[i]);
+    if (lines[i][0] == '\0')
+      continue;
+    words = g_strsplit (lines[i], " ", -1);
+    if (g_strv_length (words) != 2 || !is_hex_colour (words[1]))
+      return NULL;
+    if (g_str_equal (words[0], "frame") && frame == NULL) {
+      words_frame = g_steal_pointer (&words);
+      frame = words_frame[1];
+    } else if (g_str_equal (words[0], "fill") && fill == NULL) {
+      words_fill = g_steal_pointer (&words);
+      fill = words_fill[1];
+    } else {
+      return NULL;
+    }
+  }
+
+  if (frame == NULL && fill == NULL)
+    return g_strdup ("");
+
+  g_string_append (css, "image {");
+  if (frame)
+    g_string_append_printf (css, " color: %s;", frame);
+  if (fill)
+    g_string_append_printf (css, " -gtk-icon-palette: success %s, warning %s,"
+                            " error %s;", fill, fill, fill);
+  g_string_append (css, " }");
+
+  return g_string_free (g_steal_pointer (&css), FALSE);
+}
+
+
+/* Read the colour and put it on the stylesheet. Anything odd is "no
+   colour": the battery in the bar's own foreground, which is what it was
+   before any of this. */
+static void
+update_colour (GtkWidget *self)
+{
+  FuriosBatteryTimeData *data = get_data (self);
+  g_autofree char *text = NULL;
+  g_autofree char *css = NULL;
+  gsize len = 0;
+
+  if (data == NULL)
+    return;
+
+  if (g_file_load_contents (data->colour_file, NULL, &text, &len, NULL, NULL) &&
+      len <= MAX_COLOUR_LEN && g_utf8_validate (text, len, NULL))
+    css = colour_css (text);
+
+  gtk_css_provider_load_from_data (data->provider, css ? css : "", -1, NULL);
+}
+
+
 /*
  * Take the place immediately in front of the battery, once, as soon as the
  * shell has put us in its box.
@@ -246,11 +434,16 @@ take_place_beside_the_battery (GtkWidget *self)
   if (box == NULL)
     return;                     /* not in the bar yet - asked again later */
 
-  /* In the box, so this is the one attempt there is going to be. */
+  /* No battery yet is asked again: the shell may fill its box after it has
+     put us in. Found, this is the one attempt there is going to be. */
+  gtk_container_foreach (GTK_CONTAINER (box), look_at_child, &battery);
+  if (battery == NULL)
+    return;
   data->placed = TRUE;
 
-  gtk_container_foreach (GTK_CONTAINER (box), look_at_child, &battery);
-  if (battery == NULL || !has_prop (battery, "priority"))
+  colour_the_battery (data, battery);
+
+  if (!has_prop (battery, "priority"))
     return;
 
   g_object_get (battery, "priority", &priority, NULL);
@@ -304,6 +497,18 @@ static void
 on_changed (GtkWidget *self)
 {
   update_label (self);
+  update_colour (self);
+  take_place_beside_the_battery (self);
+}
+
+
+/* The shell puts us into its box after building us. That is the moment the
+   battery beside us can be found - whether or not there is a time to show,
+   because the colour needs it just as much. */
+static void
+on_hierarchy_changed (GtkWidget *self, GtkWidget *previous_toplevel)
+{
+  take_place_beside_the_battery (self);
 }
 
 
@@ -344,7 +549,8 @@ furios_battery_time_init (GTypeInstance *instance, gpointer klass)
 {
   GtkWidget *self = GTK_WIDGET (instance);
   FuriosBatteryTimeData *data = g_new0 (FuriosBatteryTimeData, 1);
-  g_autofree char *path = state_path ();
+  g_autofree char *path = state_path ("furios-battery-time");
+  g_autofree char *colour_path = state_path (COLOUR_FILE);
   g_autoptr (GFile) dir = NULL;
 
   g_object_set_data_full (G_OBJECT (self), DATA_KEY, data, data_free);
@@ -367,6 +573,9 @@ furios_battery_time_init (GTypeInstance *instance, gpointer klass)
   hide_the_icon (self);
 
   data->file = g_file_new_for_path (path);
+  data->colour_file = g_file_new_for_path (colour_path);
+  data->provider = gtk_css_provider_new ();
+  data->coloured = g_ptr_array_new_with_free_func (g_object_unref);
 
   /* The directory, not the file: battctl writes beside the target and
      renames, so the inode changes on every update and a monitor on the file
@@ -378,11 +587,14 @@ furios_battery_time_init (GTypeInstance *instance, gpointer klass)
                               G_CALLBACK (on_changed), self);
 
   g_signal_connect (self, "destroy", G_CALLBACK (on_destroy), NULL);
+  g_signal_connect (self, "hierarchy-changed",
+                    G_CALLBACK (on_hierarchy_changed), NULL);
 
   /* Nothing to say until there is something to say. phosh shows every
      widget it is handed, so hiding has to be our own doing. */
   gtk_widget_set_no_show_all (self, TRUE);
   update_label (self);
+  update_colour (self);
 
   /* We are built before the shell puts us in its box, so the place beside
      the battery cannot be taken yet. The first idle after that is late

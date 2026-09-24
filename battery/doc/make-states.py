@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: MIT
 """Draws the chart of states for the README.
 
-With GTK's own symbolic renderer and the same four colours `battctl` writes
-into the themes - not painted by hand. What is seen here is what phosh puts
+With GTK's own symbolic renderer and the same colours `battctl` hands the
+widget in the bar - not painted by hand. What is seen here is what phosh puts
 in the bar, only larger.
 
     python3 doc/make-states.py [target.png]
@@ -48,51 +48,44 @@ def rgba(colour):
 
 
 def icon(name, power, filling):
-    """The icon as GTK draws it with these colours.
-
-    Where the icon has a bolt of its own - the charging ones battctl
-    generates - the power colour goes on the bolt and the frame stays in
-    the colour of the bar. Everywhere else it goes on the frame, which is
-    what the phone does too.
+    """The icon as GTK draws it with these colours: the power colour on
+    the frame (and the bolt, which Adwaita draws in the same path), the
+    filling colour on the level inside - what the widget in the bar does.
     """
     info = Gtk.IconTheme.get_default().lookup_icon(
         name, ICON_PX, Gtk.IconLookupFlags.FORCE_SYMBOLIC)
-    with_bolt = False
-    try:
-        with open(info.get_filename()) as fh:
-            with_bolt = b.BOLT_MARK in fh.read()
-    except (OSError, TypeError):
-        pass
     inside = rgba(b.COLORS.get(filling, FG))
-    if with_bolt and power:
-        front, bolt = rgba(FG), rgba(b.COLORS[power])
-    else:
-        front, bolt = rgba(b.COLORS.get(power, FG)), inside
-    pixbuf, _was_symbolic = info.load_symbolic(front, inside, bolt, inside)
+    front = rgba(b.COLORS.get(power, FG))
+    pixbuf, _was_symbolic = info.load_symbolic(front, inside, inside, inside)
     return pixbuf
 
 
 # (heading, [(icon name, frame colour, filling colour, label)])
 #
-# The discharge icons come from ~/.local/share/icons, where battctl has
-# written them - GTK searches there first, and only there do they have a
-# filling area of their own. Without them the middle row shows one colour
-# instead of two, and the chart thereby tells the truth about the phone it
-# was drawn on.
+# Adwaita's discharge icons above 20 % are one path, so the more urgent of
+# the two colours takes the whole icon there - which is what the daemon
+# decides as well.
+D = b.DEFAULTS
 CHART = [
-    ("Charging - the bolt says how fast", [
-        ("battery-level-80-charging-symbolic", "green", None, "from 7 W"),
-        ("battery-level-80-charging-symbolic", "amber", None, "3-7 W"),
-        ("battery-level-80-charging-symbolic", "red", None, "below 3 W"),
+    ("Charging - frame and bolt say how fast", [
+        ("battery-level-80-charging-symbolic", "green", None,
+         "from %g W" % D["charge_green_w"]),
+        ("battery-level-80-charging-symbolic", "amber", None,
+         "%g-%g W" % (D["charge_amber_w"], D["charge_green_w"])),
+        ("battery-level-80-charging-symbolic", "red", None,
+         "below %g W" % D["charge_amber_w"]),
     ]),
     ("On battery - the frame says how much is drawn", [
-        ("battery-level-80-symbolic", None, None, "below 2 W"),
-        ("battery-level-80-symbolic", "amber", None, "2-4 W"),
-        ("battery-level-80-symbolic", "red", None, "from 4 W"),
+        ("battery-level-80-symbolic", None, None,
+         "below %g W" % D["drain_amber_w"]),
+        ("battery-level-80-symbolic", "amber", "amber",
+         "%g-%g W" % (D["drain_amber_w"], D["drain_red_w"])),
+        ("battery-level-80-symbolic", "red", "red",
+         "from %g W" % D["drain_red_w"]),
     ]),
     ("Filling - the charge level, in both cases", [
         ("battery-level-80-symbolic", None, None, "above 60 %"),
-        ("battery-level-40-symbolic", None, "amber", "15-60 %"),
+        ("battery-level-40-symbolic", "amber", "amber", "15-60 %"),
         ("battery-level-10-symbolic", "red", "red", "below 15 %"),
     ]),
 ]

@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: MIT
 #
 # Removes everything this project installed, and - first - everything it
-# changed. The order matters: the themes must go back before the program that
-# knows how to put them back is deleted.
+# changed. The order matters: colour, time and plugin list must go back
+# before the program that knows how to put them back is deleted.
 set -uo pipefail
 
 if [ "$(id -u)" = 0 ]; then
@@ -23,4 +23,4 @@ rm -f "$BIN/battctl" "$UNIT/furios-battery-color.service"
 rm -rf "$DOC"
 systemctl --user daemon-reload
 
-echo "Removed. Theme: $(gsettings get org.gnome.desktop.interface gtk-theme 2>/dev/null)"
+echo "Removed."
