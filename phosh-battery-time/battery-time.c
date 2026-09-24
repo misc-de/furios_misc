@@ -20,10 +20,12 @@
  *   the battery it talks about. So this is a PhoshStatusIcon now, and takes
  *   its place beside the battery by priority (see below).
  *
- *   HOW BIG it is. The box's font is 13px, the size of the percentage. The
- *   clock is 16px, and that is the size this is asked to match, so the label
- *   carries a stylesheet of its own - three declarations, on this one widget
- *   and nothing else.
+ *   HOW BIG it is. Nothing here says: the label is left to phosh's own rule
+ *   for the box it stands in (`phosh-top-panel .indicators`, 13px, weight
+ *   800, tabular figures), which is the rule the percentage beside it is
+ *   drawn by. It carried a stylesheet of its own until 17.9.2026, matching
+ *   the 16px clock instead - and next to the battery it belongs to, that
+ *   read as a second clock rather than as part of the reading.
  *
  * This runs in phosh's process. So: it reads one small file, it believes
  * nothing about it, and it does nothing else. Every failure is "show
@@ -81,16 +83,6 @@ GType phosh_status_icon_get_type (void);
    than breaking anything. */
 #define ICONS_BOX_TYPE_NAME "PhoshStatusIconsBox"
 #define BATTERY_TYPE_NAME   "PhoshBatteryInfo"
-
-/* The clock's three declarations, on our label alone. A provider added to
-   one widget's style context reaches that widget and nothing else, which is
-   why this does not need - and must not have - a screen-wide stylesheet. */
-#define LABEL_CSS                            \
-  "label {"                                  \
-  "  font-size: 16px;"                       \
-  "  font-weight: bold;"                     \
-  "  font-feature-settings: \"tnum\";"       \
-  "}"
 
 /* Everything this widget owns. It hangs off the instance as data rather than
    living in a private struct, because the type is registered at load time
@@ -352,7 +344,6 @@ furios_battery_time_init (GTypeInstance *instance, gpointer klass)
 {
   GtkWidget *self = GTK_WIDGET (instance);
   FuriosBatteryTimeData *data = g_new0 (FuriosBatteryTimeData, 1);
-  g_autoptr (GtkCssProvider) provider = gtk_css_provider_new ();
   g_autofree char *path = state_path ();
   g_autoptr (GFile) dir = NULL;
 
@@ -362,10 +353,10 @@ furios_battery_time_init (GTypeInstance *instance, gpointer klass)
   gtk_widget_set_valign (data->label, GTK_ALIGN_CENTER);
   gtk_widget_show (data->label);
 
-  gtk_css_provider_load_from_data (provider, LABEL_CSS, -1, NULL);
-  gtk_style_context_add_provider (gtk_widget_get_style_context (data->label),
-                                  GTK_STYLE_PROVIDER (provider),
-                                  GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+  /* No stylesheet of our own: size, weight and tabular figures are what the
+     box gives its children, and that is what the percentage is drawn with.
+     Font properties are inherited in CSS, so standing in the box is the
+     whole of it. */
 
   /* The text goes where the percentage goes in phosh's own battery icon:
      the status icon's extra widget, beside the (hidden) image. */

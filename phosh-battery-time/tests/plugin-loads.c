@@ -186,6 +186,57 @@ write_file (const char *path, const char *text, gsize len)
 }
 
 
+/*
+ * phosh's own rule for the indicator box, as its common.css has it:
+ *
+ *   phosh-top-panel .indicators { font-size: 13px; font-weight: 800;
+ *                                 font-feature-settings: "tnum"; }
+ *
+ * Applied here to the stand-in box by its style class, because the shell's
+ * stylesheet is not loaded in a test process. What is being checked is not
+ * that phosh has this rule - it does - but that our label is left to inherit
+ * it, instead of carrying a size of its own.
+ */
+#define INDICATORS_FONT_PX 13.0
+
+static void
+apply_indicators_rule (GtkWidget *box)
+{
+  g_autoptr (GtkCssProvider) provider = gtk_css_provider_new ();
+
+  gtk_css_provider_load_from_data (provider,
+                                   ".indicators {"
+                                   "  font-size: 13px;"
+                                   "  font-weight: 800;"
+                                   "  font-feature-settings: \"tnum\";"
+                                   "}", -1, NULL);
+  gtk_style_context_add_class (gtk_widget_get_style_context (box), "indicators");
+  gtk_style_context_add_provider (gtk_widget_get_style_context (box),
+                                  GTK_STYLE_PROVIDER (provider),
+                                  GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+}
+
+
+/* The label's weight as GTK will draw it. */
+static int
+font_weight_of (GtkLabel *label)
+{
+  GtkStyleContext *context = gtk_widget_get_style_context (GTK_WIDGET (label));
+  PangoFontDescription *desc = NULL;
+  int weight;
+
+  gtk_style_context_get (context, gtk_style_context_get_state (context),
+                         GTK_STYLE_PROPERTY_FONT, &desc, NULL);
+  if (desc == NULL)
+    return 0;
+
+  weight = pango_font_description_get_weight (desc);
+  pango_font_description_free (desc);
+
+  return weight;
+}
+
+
 /* The label's size as GTK will draw it, in pixels. */
 static double
 font_size_of (GtkLabel *label)
@@ -218,6 +269,7 @@ main (int argc, char *argv[])
   GtkWidget *widget, *box, *battery, *other;
   GType status_icon_type, box_type, battery_type;
   GType type;
+  double default_font_size;
 
   if (argc < 2) {
     g_printerr ("usage: %s <directory holding the built plugin>\n", argv[0]);
@@ -266,6 +318,16 @@ main (int argc, char *argv[])
   check_true ("a status icon, so the bar sorts it with the icons",
               g_type_is_a (type, status_icon_type));
 
+  /* What a label of ours is drawn at when nobody says otherwise. Taken from
+     a plain label in this process, so the check below is "we add nothing",
+     not "we add exactly this". */
+  {
+    GtkWidget *plain = gtk_label_new ("x");
+    g_object_ref_sink (plain);
+    default_font_size = font_size_of (GTK_LABEL (plain));
+    g_object_unref (plain);
+  }
+
   /* A time is already there when the widget is built - the ordinary case
      after the shell restarts with the daemon running. */
   write_file (state, "04:38\n", 6);
@@ -275,8 +337,8 @@ main (int argc, char *argv[])
               settles_to (widget, "04:38", TRUE));
   check_int ("and it asks for a place one below the icons around it",
              priority_of (widget), DEFAULT_PRIORITY - 1);
-  check_true ("in the clock's size, not the box's 13px",
-              font_size_of (label_of (widget)) == 16.0);
+  check_true ("nothing of its own decides the size - the box does",
+              font_size_of (label_of (widget)) == default_font_size);
 
   /* The bar, as far as the plugin cares about it: a box under the name it
      looks for, a battery in it, and one other icon that must stay where it
@@ -291,6 +353,15 @@ main (int argc, char *argv[])
 
   write_file (state, "12:00\n", 6);
   check_true ("a new time replaces it", settles_to (widget, "12:00", TRUE));
+
+  /* The size the percentage is drawn at, and the only thing that puts it on
+     our label: phosh's rule for the box, inherited by what stands in it. The
+     shell's own stylesheet is not in this process, so the rule is applied
+     here the way phosh applies it - to the box, by its style class. */
+  apply_indicators_rule (box);
+  check_true ("in the box it is the size of the percentage beside it",
+              font_size_of (label_of (widget)) == INDICATORS_FONT_PX);
+  check_true ("and in its weight", font_weight_of (label_of (widget)) >= 700);
   check_int ("the battery comes down to meet it, so the two stand together",
              priority_of (battery), DEFAULT_PRIORITY - 1);
   check_int ("and no other icon is touched",

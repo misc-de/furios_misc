@@ -58,11 +58,14 @@ fit from the right, and the battery already stood last.
 
 ## The size
 
-The indicator box is 13px, which is the size of the battery percentage; the
-clock is 16px. This asks for the clock's size, so the label carries a
-stylesheet of its own — `font-size`, `font-weight`, tabular figures — added to
-that one widget's style context and to nothing else. No screen-wide
-stylesheet, no theme.
+The size of the percentage beside it, because it is a reading about the same
+battery: `phosh-top-panel .indicators` — 13px, weight 800, tabular figures —
+which the label inherits by standing in that box. Nothing here sets a font at
+all.
+
+It asked for the clock's 16px until 17.9.2026, with a stylesheet of its own on
+that one widget. Next to the battery it belongs to, that read as a second
+clock rather than as part of the reading.
 
 ## Install
 
