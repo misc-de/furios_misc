@@ -309,6 +309,43 @@ font_size_of (GtkLabel *label)
 }
 
 
+/* The colour at one point of the icon, in 16ths of its size, as GTK draws
+   the image - through the draw signal, so the plugin's hand is in it. */
+static void
+pixel_of (GtkWidget *image, int size, double ux, double uy, GdkRGBA *rgba)
+{
+  int width = gtk_widget_get_allocated_width (image);
+  int height = gtk_widget_get_allocated_height (image);
+  cairo_surface_t *surface = cairo_image_surface_create (CAIRO_FORMAT_ARGB32, width, height);
+  cairo_t *cr = cairo_create (surface);
+  int x = (width - size) / 2 + (int) (ux * size / 16);
+  int y = (height - size) / 2 + (int) (uy * size / 16);
+  guint32 pixel;
+  double alpha;
+
+  gtk_widget_draw (image, cr);
+  cairo_destroy (cr);
+  cairo_surface_flush (surface);
+  pixel = *(guint32 *) (cairo_image_surface_get_data (surface) +
+                        y * cairo_image_surface_get_stride (surface) + x * 4);
+  cairo_surface_destroy (surface);
+
+  /* Premultiplied: back to the colour itself. */
+  alpha = (pixel >> 24) / 255.0;
+  rgba->alpha = alpha;
+  rgba->red = alpha ? ((pixel >> 16) & 0xff) / 255.0 / alpha : 0;
+  rgba->green = alpha ? ((pixel >> 8) & 0xff) / 255.0 / alpha : 0;
+  rgba->blue = alpha ? (pixel & 0xff) / 255.0 / alpha : 0;
+}
+
+
+static gboolean
+is_reddish (const GdkRGBA *c)
+{
+  return c->alpha > 0.9 && c->red > 0.8 && c->green < 0.3 && c->blue < 0.3;
+}
+
+
 int
 main (int argc, char *argv[])
 {
@@ -486,6 +523,45 @@ main (int argc, char *argv[])
 
   write_file (colour, "frame #e01b24\n", 14);
   colour_settles_to (battery_image, &red);
+
+  /* Charging: frame and bolt are one path in Adwaita, and only the bolt
+     is to take the colour. Drawn for real, in a window of its own. */
+  {
+    GtkWidget *window = gtk_offscreen_window_new ();
+    GtkWidget *parent = gtk_widget_get_parent (box);
+    GdkRGBA bolt, frame, black, around;
+    const int size = 32;
+
+    g_assert (parent == NULL);
+    gtk_container_add (GTK_CONTAINER (window), box);
+    gtk_image_set_from_icon_name (GTK_IMAGE (battery_image),
+                                  "battery-level-50-charging-symbolic",
+                                  GTK_ICON_SIZE_BUTTON);
+    gtk_image_set_pixel_size (GTK_IMAGE (battery_image), size);
+    gdk_rgba_parse (&black, "#000000");
+    gtk_widget_show_all (window);
+    colour_settles_to (battery_image, &black);   /* just pumps: never black */
+
+    /* The bar's own colour is the window's now, so the icon beside it
+       says what that is. */
+    colour_of (other_image, &around);
+    check_true ("charging, the outline is back in the bar's own colour",
+                colour_settles_to (battery_image, &around));
+    pixel_of (battery_image, size, 10.5, 12.5, &bolt);
+    pixel_of (battery_image, size, 2.5, 9.0, &frame);
+    check_true ("and the bolt alone takes the colour", is_reddish (&bolt));
+    check_true ("the frame beside it does not",
+                frame.alpha > 0.9 && !is_reddish (&frame));
+
+    gtk_image_set_from_icon_name (GTK_IMAGE (battery_image),
+                                  "battery-level-50-symbolic", GTK_ICON_SIZE_BUTTON);
+    check_true ("on battery the frame takes it again",
+                colour_settles_to (battery_image, &red));
+
+    g_object_ref (box);
+    gtk_container_remove (GTK_CONTAINER (window), box);
+    gtk_widget_destroy (window);
+  }
 
   /* Switched off, or the panel torn down: the shell must be left as we
      found it. */

@@ -107,6 +107,15 @@ widget's context reaches that widget alone: not the icons beside it, not the
 rest of the shell, not any other program. It is taken off again when the
 widget goes.
 
+**While charging, only the bolt.** Adwaita draws the outline and the bolt
+as one path, so `color` cannot tell them apart. On a `-charging` icon the
+widget therefore leaves `color` out of the rule and draws the image itself:
+GTK renders it into a surface of ours, the ink's bounding box says where the
+16-unit icon landed, and inside a region around the bolt (read from the
+SVGs: the frame stops at y 6 and x 10, the bolt starts at y 8 and x 9) the
+icon's own coverage masks the `frame` colour. Anything that does not have
+the measured shape is drawn uncoloured.
+
 The file is not CSS. Two known words, each with a `#rrggbb`; anything else
 in it means no colour at all, so nothing written there can reach further
 than those two declarations.

@@ -47,6 +47,8 @@
 #include <gtk/gtk.h>
 #include <gio/gio.h>
 #include <phosh-plugin.h>
+#include <math.h>
+#include <string.h>
 
 /* Long enough for "100:00" and a newline, short enough that a file which is
    not ours cannot become a label. */
@@ -111,6 +113,7 @@ GType phosh_status_icon_get_type (void);
 #define DATA_KEY "furios-battery-time"
 
 typedef struct {
+  GtkWidget    *self;           /* not a reference: the data lives on it */
   GtkWidget    *label;
   GFile        *file;
   GFile        *colour_file;
@@ -120,6 +123,11 @@ typedef struct {
      be taken off them again when this widget goes. */
   GtkCssProvider *provider;
   GPtrArray      *coloured;
+
+  /* The frame's colour while the battery charges: it goes on the bolt
+     alone then, which no stylesheet can reach - see paint_the_bolt(). */
+  GdkRGBA         bolt;
+  gboolean        has_bolt;
 
   /* The shell's battery icon, while we have its priority turned down, and
      the value to give back. NULL until we have found it - and after, if
@@ -199,6 +207,8 @@ uncolour_the_battery (FuriosBatteryTimeData *data)
 
     gtk_style_context_remove_provider (gtk_widget_get_style_context (image),
                                        GTK_STYLE_PROVIDER (data->provider));
+    g_signal_handlers_disconnect_by_data (image, data);
+    gtk_widget_queue_draw (image);
   }
   g_ptr_array_set_size (data->coloured, 0);
 }
@@ -293,6 +303,11 @@ images_of (GtkWidget *icon)
 /* Our stylesheet on the battery's image, and on nothing else. A provider
    added to one widget's style context reaches that widget alone - not its
    neighbours, not the rest of the shell, not any other program. */
+static void on_battery_icon_changed (GtkWidget *image, GParamSpec *pspec,
+                                     FuriosBatteryTimeData *data);
+static gboolean on_battery_draw (GtkWidget *image, cairo_t *cr,
+                                 FuriosBatteryTimeData *data);
+
 static void
 colour_the_battery (FuriosBatteryTimeData *data, GObject *battery)
 {
@@ -306,9 +321,193 @@ colour_the_battery (FuriosBatteryTimeData *data, GObject *battery)
     gtk_style_context_add_provider (gtk_widget_get_style_context (l->data),
                                     GTK_STYLE_PROVIDER (data->provider),
                                     COLOUR_PRIORITY);
+    /* Charging or not decides where the frame's colour goes, and phosh
+       says which by changing the icon. */
+    g_signal_connect (l->data, "notify::icon-name",
+                      G_CALLBACK (on_battery_icon_changed), data);
+    g_signal_connect (l->data, "notify::gicon",
+                      G_CALLBACK (on_battery_icon_changed), data);
+    g_signal_connect (l->data, "draw", G_CALLBACK (on_battery_draw), data);
     g_ptr_array_add (data->coloured, g_object_ref (l->data));
   }
   g_list_free (images);
+}
+
+
+/* The icon's name, whichever way phosh handed it over. Borrowed. */
+static const char *
+icon_name_of (GtkImage *image)
+{
+  const char *name = NULL;
+  GIcon *gicon = NULL;
+
+  switch (gtk_image_get_storage_type (image)) {
+  case GTK_IMAGE_ICON_NAME:
+    gtk_image_get_icon_name (image, &name, NULL);
+    return name;
+  case GTK_IMAGE_GICON:
+    gtk_image_get_gicon (image, &gicon, NULL);
+    if (G_IS_THEMED_ICON (gicon)) {
+      const char * const *names = g_themed_icon_get_names (G_THEMED_ICON (gicon));
+      return names ? names[0] : NULL;
+    }
+    return NULL;
+  default:
+    return NULL;
+  }
+}
+
+
+/* battery-level-NN-charging-symbolic: the one family with a bolt. */
+static gboolean
+is_charging_icon (GtkWidget *image)
+{
+  const char *name = GTK_IS_IMAGE (image) ? icon_name_of (GTK_IMAGE (image)) : NULL;
+
+  return name != NULL && strstr (name, "-charging") != NULL;
+}
+
+
+static gboolean
+any_charging (FuriosBatteryTimeData *data)
+{
+  for (guint i = 0; data->coloured && i < data->coloured->len; i++) {
+    if (is_charging_icon (g_ptr_array_index (data->coloured, i)))
+      return TRUE;
+  }
+  return FALSE;
+}
+
+
+/*
+ * Where the bolt is, in Adwaita's 16-unit charging icons - all of them
+ * alike, and read out of the SVGs rather than guessed.
+ *
+ * Frame and bolt are ONE path there, so `color` can only ever take both, and
+ * the level inside is a second path whose top edge runs parallel to the
+ * bolt's. What keeps them apart is space: the frame stops at y 6 on the
+ * right and at x 10 along the bottom, the bolt starts at y 8 and x 9, and
+ * the level's diagonal (x + y = 19.2) runs 1.4 units below the bolt's
+ * (x + y = 20.6). The outline below goes through the middle of each gap.
+ */
+static void
+bolt_region (cairo_t *cr, double ox, double oy, double unit)
+{
+  static const double points[][2] = {
+    { 12.9, 7.0 }, { 16.5, 7.0 }, { 16.5, 16.5 }, { 10.5, 16.5 },
+    { 10.5, 13.6 }, { 9.0, 13.6 }, { 9.0, 10.9 },
+  };
+
+  cairo_move_to (cr, ox + points[0][0] * unit, oy + points[0][1] * unit);
+  for (guint i = 1; i < G_N_ELEMENTS (points); i++)
+    cairo_line_to (cr, ox + points[i][0] * unit, oy + points[i][1] * unit);
+  cairo_close_path (cr);
+}
+
+
+/* The box around everything the icon drew, in device pixels. The icon's own
+   extremes all sit on whole units - frame top at y 0, frame side at x 2,
+   bolt at x 16 and y 16 - so at any size its edges are whole pixels, and
+   half coverage is a safe line to draw. */
+static gboolean
+ink_box (cairo_surface_t *surface, int *x0, int *y0, int *x1, int *y1)
+{
+  int width = cairo_image_surface_get_width (surface);
+  int height = cairo_image_surface_get_height (surface);
+  int stride = cairo_image_surface_get_stride (surface);
+  const unsigned char *pixels = cairo_image_surface_get_data (surface);
+
+  *x0 = width; *y0 = height; *x1 = -1; *y1 = -1;
+  for (int y = 0; y < height; y++) {
+    const guint32 *row = (const guint32 *) (pixels + y * stride);
+
+    for (int x = 0; x < width; x++) {
+      if ((row[x] >> 24) < 0x80)
+        continue;
+      *x0 = MIN (*x0, x); *x1 = MAX (*x1, x + 1);
+      *y0 = MIN (*y0, y); *y1 = MAX (*y1, y + 1);
+    }
+  }
+  return *x1 > *x0 && *y1 > *y0;
+}
+
+
+/*
+ * The icon, drawn by GTK as always, with the bolt in the frame's colour.
+ *
+ * GTK draws it into a surface of our own first, which also says where it
+ * ended up - alignment, size and scale are then GTK's business and not
+ * ours to repeat. Everything outside the bolt is copied as it is; inside,
+ * the icon's own coverage is used as the mask for the colour, so the bolt
+ * keeps its exact shape and edges.
+ *
+ * Anything that does not look like the icon we measured - another theme,
+ * another shape - is drawn as it is, uncoloured.
+ */
+static gboolean
+paint_the_bolt (GtkWidget *image, cairo_t *cr, const GdkRGBA *colour)
+{
+  int scale = gtk_widget_get_scale_factor (image);
+  int width = gtk_widget_get_allocated_width (image);
+  int height = gtk_widget_get_allocated_height (image);
+  cairo_surface_t *icon;
+  cairo_t *icon_cr;
+  int x0, y0, x1, y1;
+  double unit;
+
+  if (width <= 0 || height <= 0)
+    return FALSE;
+
+  icon = cairo_image_surface_create (CAIRO_FORMAT_ARGB32, width * scale, height * scale);
+  if (cairo_surface_status (icon) != CAIRO_STATUS_SUCCESS) {
+    cairo_surface_destroy (icon);
+    return FALSE;
+  }
+  cairo_surface_set_device_scale (icon, scale, scale);
+  icon_cr = cairo_create (icon);
+  GTK_WIDGET_GET_CLASS (image)->draw (image, icon_cr);
+  cairo_destroy (icon_cr);
+  cairo_surface_flush (icon);
+
+  cairo_save (cr);
+  if (ink_box (icon, &x0, &y0, &x1, &y1) &&
+      (unit = (y1 - y0) / 16.0) > 0 &&
+      fabs ((x1 - x0) - 14 * unit) <= 1.0) {
+    double ox = (x1 - 16 * unit) / scale;
+    double oy = (double) y0 / scale;
+    double u = unit / scale;
+
+    cairo_rectangle (cr, 0, 0, width, height);
+    bolt_region (cr, ox, oy, u);
+    cairo_set_fill_rule (cr, CAIRO_FILL_RULE_EVEN_ODD);
+    cairo_clip (cr);
+    cairo_set_source_surface (cr, icon, 0, 0);
+    cairo_paint (cr);
+    cairo_restore (cr);
+
+    cairo_save (cr);
+    bolt_region (cr, ox, oy, u);
+    cairo_clip (cr);
+    gdk_cairo_set_source_rgba (cr, colour);
+    cairo_mask_surface (cr, icon, 0, 0);
+  } else {
+    cairo_set_source_surface (cr, icon, 0, 0);
+    cairo_paint (cr);
+  }
+  cairo_restore (cr);
+  cairo_surface_destroy (icon);
+
+  return TRUE;
+}
+
+
+static gboolean
+on_battery_draw (GtkWidget *image, cairo_t *cr, FuriosBatteryTimeData *data)
+{
+  if (!data->has_bolt || !is_charging_icon (image))
+    return FALSE;               /* GTK draws it, as it always does */
+
+  return paint_the_bolt (image, cr, &data->bolt);
 }
 
 
@@ -333,15 +532,17 @@ is_hex_colour (const char *text)
  * built here, so nothing written into it can reach further than the two
  * declarations below:
  *
- *   frame   the battery's outline (and on a charging icon the bolt, which
- *           Adwaita draws in the same path) - `color`
+ *   frame   the battery's outline - `color`. While it charges, the bolt
+ *           instead and the outline stays plain: Adwaita draws both in one
+ *           path, so that half is not CSS at all (see paint_the_bolt) and
+ *           comes back through `bolt`.
  *   fill    the level inside, which Adwaita draws with the symbolic
  *           palette: success, and warning/error on the low-level icons
  *
  * A key that is absent is how "no colour" is said for that half.
  */
 static char *
-colour_css (const char *text)
+colour_css (const char *text, gboolean charging, GdkRGBA *bolt, gboolean *has_bolt)
 {
   g_auto (GStrv) lines = g_strsplit (text, "\n", -1);
   g_autoptr (GString) css = g_string_new (NULL);
@@ -366,6 +567,11 @@ colour_css (const char *text)
     } else {
       return NULL;
     }
+  }
+
+  if (frame && charging) {
+    *has_bolt = gdk_rgba_parse (bolt, frame);
+    frame = NULL;
   }
 
   if (frame == NULL && fill == NULL)
@@ -397,11 +603,27 @@ update_colour (GtkWidget *self)
   if (data == NULL)
     return;
 
+  data->has_bolt = FALSE;
   if (g_file_load_contents (data->colour_file, NULL, &text, &len, NULL, NULL) &&
       len <= MAX_COLOUR_LEN && g_utf8_validate (text, len, NULL))
-    css = colour_css (text);
+    css = colour_css (text, any_charging (data), &data->bolt, &data->has_bolt);
+  if (css == NULL)
+    data->has_bolt = FALSE;
 
   gtk_css_provider_load_from_data (data->provider, css ? css : "", -1, NULL);
+
+  /* The bolt is not in the stylesheet, so a change to it alone restyles
+     nothing - it has to be asked for. */
+  for (guint i = 0; i < data->coloured->len; i++)
+    gtk_widget_queue_draw (g_ptr_array_index (data->coloured, i));
+}
+
+
+static void
+on_battery_icon_changed (GtkWidget *image, GParamSpec *pspec,
+                         FuriosBatteryTimeData *data)
+{
+  update_colour (data->self);
 }
 
 
@@ -442,6 +664,7 @@ take_place_beside_the_battery (GtkWidget *self)
   data->placed = TRUE;
 
   colour_the_battery (data, battery);
+  update_colour (self);
 
   if (!has_prop (battery, "priority"))
     return;
@@ -553,6 +776,7 @@ furios_battery_time_init (GTypeInstance *instance, gpointer klass)
   g_autofree char *colour_path = state_path (COLOUR_FILE);
   g_autoptr (GFile) dir = NULL;
 
+  data->self = self;
   g_object_set_data_full (G_OBJECT (self), DATA_KEY, data, data_free);
 
   data->label = gtk_label_new (NULL);

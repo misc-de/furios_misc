@@ -9,7 +9,7 @@ The icon has two parts, and they say two different things:
 
 | | what it says | |
 |---|---|---|
-| **the frame and the bolt**, while charging | how fast the battery is filling | green · amber · red |
+| **the bolt**, while charging | how fast the battery is filling | green · amber · red |
 | **the frame**, on battery | how much is being drawn | plain · amber · red |
 | **the filling**, always | how full it is | plain · amber · red |
 
@@ -59,7 +59,10 @@ fill #e01b24
 
 The widget builds the stylesheet from that itself — `color` for the frame,
 `-gtk-icon-palette: success …, warning …, error …` for the filling — and adds
-it to the style context of the battery icon's **image alone**. Nothing else
+it to the style context of the battery icon's **image alone**. While the
+battery charges, the `frame` colour goes on the bolt instead and the outline
+stays plain; Adwaita draws both as one path, so the widget paints the bolt
+itself (see the widget's README). Nothing else
 in the shell sees it, and no other program does. A line it does not
 understand means no colour at all rather than CSS from a file.
 
@@ -82,7 +85,7 @@ on `adw-gtk3`, buttons grey again. No desktop setting is written any more;
 
 | | plain | green | amber | red |
 |---|---|---|---|---|
-| frame and bolt, charging | — | from 7 W | from 3 W | below that |
+| bolt, charging | — | from 7 W | from 3 W | below that |
 | frame, on battery | below 3 W | — | from 3 W | from 5 W |
 | filling | above 60 % | — | below 60 % | below 15 % |
 
