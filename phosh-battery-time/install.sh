@@ -42,8 +42,9 @@ echo
 echo "Installed in $DIR."
 # Installed, not switched on: the icon appears when battctl's "time left" or
 # "charging time" is switched on, and that is a decision somebody makes.
-echo "It shows a time once battctl has one to show - switch on \"time left\""
-echo "or \"charging time\" (in the app under \"Battery\", or: battctl config runtime on)."
+echo "It colours the battery and shows a time once battctl has something to"
+echo "show - switch an option on in the app under \"Battery\", or e.g.:"
+echo "battctl config charging on"
 echo
 # phosh scans its plugin directory once, when the shell starts. A plugin put
 # there afterwards is found by nobody until then, and the shell says so in
