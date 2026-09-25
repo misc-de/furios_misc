@@ -6,13 +6,15 @@ the phone, without patching or replacing any part of FuriOS.
 
 The larger building sites live elsewhere — [furios_pipewire][a] (audio),
 [furios_modem_fixes][m] (cellular), [furios_gps][g] (location),
-[furios_killswitch][k] (the three switches on the case) — and all of them are
-operated from the same app, [furios_app][p].
+[furios_killswitch][k] (the three switches on the case), [furios_phosh][h]
+(phosh's app overview: folders at the bottom, apps without names) — and all
+of them are operated from the same app, [furios_app][p].
 
 [a]: https://github.com/misc-de/furios_pipewire
 [m]: https://github.com/misc-de/furios_modem_fixes
 [g]: https://github.com/misc-de/furios_gps
 [k]: https://github.com/misc-de/furios_killswitch
+[h]: https://github.com/misc-de/furios_phosh
 [p]: https://github.com/misc-de/furios_app
 
 ## What is in here
