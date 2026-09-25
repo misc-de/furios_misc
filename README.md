@@ -21,7 +21,7 @@ of them are operated from the same app, [furios_app][p].
 
 | | | |
 |---|---|---|
-| [battery](battery/) | `battctl` | The battery icon takes colour: the frame from the charging power, the filling from the charge level |
+| [battery](battery/) | `battctl` | The battery icon takes colour: the bolt from the charging power, the frame from the drain on battery, the filling from the charge level |
 | [phosh-battery-time](phosh-battery-time/) | a phosh plugin | The time `battctl` works out, as a status icon in the top bar — lock screen included |
 
 Each directory stands on its own: its own README, its own `install.sh`, its

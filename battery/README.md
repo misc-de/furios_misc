@@ -29,12 +29,12 @@ more urgent of the two takes the whole icon. The charging icons and the low
 ones have the filling as a path of its own.
 
 A wobbling connection — a broken socket, a tired plug — makes the phone jump
-between charging and discharging. The frame does **not** follow that: it
-stays plain as long as the readings of one minute do not agree about the
-direction. Otherwise the colour would be an indicator of the cable. And when
-the kernel and UPower contradict each other about the direction, the frame
-stays plain too: phosh then draws an icon the colour does not fit. Details
-in FINDINGS.md.
+between charging and discharging. The power colour (bolt or frame) does
+**not** follow that: it stays off as long as the readings of one minute do
+not agree about the direction. Otherwise the colour would be an indicator of
+the cable. And when the kernel and UPower contradict each other about the
+direction, it stays off too: phosh then draws an icon the colour does not
+fit. The filling keeps its colour in both cases. Details in FINDINGS.md.
 
 ```
 git clone https://github.com/misc-de/furios_misc

@@ -3,6 +3,10 @@
 All of it measured on the FuriPhone FLX1, FuriOS with phosh 0.55,
 GTK 3.24.52, kernel 4.19.325.
 
+In the order it was found, so some of it describes ways that are gone:
+§4-§7 and §9 are the theme and the strip, which §14 and §15 replaced. What
+the icon does today is in §16 and in the README.
+
 ## 1 · The charging power is in the battery itself
 
 ```
@@ -278,7 +282,7 @@ it again when it disappears. Test:
 
 ## 7a · The thresholds are not measured yet
 
-The defaults (charging 7/3 W, on battery 2/4 W) are guessed and marked as
+The defaults (charging 7/3 W, on battery 3/5 W) are guessed and marked as
 provisional. `battctl watch` writes the series along and reports median, p90,
 p98 and maximum at the end, split by charging and discharging;
 `battctl summarise` evaluates such a log and suggests thresholds.
@@ -498,6 +502,9 @@ bar shows the percentage instead, which is the one thing still true.
 
 ## 13 · What is still not checked
 
+*Historical: the strip is gone since §14; what is unchecked today is the
+D-Bus wiring (§8) and the plugin inside the running shell (§16).*
+
 Beside the D-Bus wiring (§8): the strip itself. Whether a layer surface comes
 up, where its ink lands and whether it takes touch are all questions for a
 compositor, and the answers here came from `grim` and `WAYLAND_DEBUG`, not
@@ -524,7 +531,8 @@ takes any `GtkWidget`, `mobi.phosh.shell.plugins status-icons` lists the ones
 to load, and the widget is appended to the shell's own indicator box - so it
 is drawn wherever that box is drawn, lock screen included, in the box's font.
 [phosh-battery-time](../phosh-battery-time/) next door is that widget: one C
-file, 150 lines, that reads one file and shows it.
+file that reads what the daemon writes and shows it (the colour came
+later, §15).
 
 What was measured on 17.9.2026 getting there, because none of it is in the
 documentation:
@@ -542,8 +550,9 @@ documentation:
   was installed since it started - the shell says `Custom status-icon
   'furios-battery-time' not found` once and goes quiet. That is not a fault
   and it is the state a phone is in between an install and the next reboot,
-  so `battctl status` says so in words, and the daemon keeps using the strip
-  until the shell has the plugin. It asks by comparing the file's mtime with
+  so `battctl status` says so in words. (Until §15 the daemon fell back to
+  the strip in that gap; the strip is gone, and the gap now simply shows
+  nothing until the reboot.) It asks by comparing the file's mtime with
   the shell's start time out of `/proc/<pid>/stat`, which is three small
   reads on a tick that is rare.
 - **A GIO module cache is not the problem.** `gio-querymodules` on that
@@ -591,6 +600,36 @@ style context. Nothing else in the shell sees it, and no desktop setting is
 written - except the plugin list the widget has to be on. What went with it:
 the generated themes, the icon theme with split-off fillings and bolts (the
 bolt no longer takes a colour of its own, frame and bolt are one path in
-Adwaita), and the strip with the emptied percentage. `battctl reset` and the
+Adwaita - §16 brings it back without an icon theme), and the strip with
+the emptied percentage. `battctl reset` and the
 daemon's start put back what an older version left on a phone.
+
+## 16 · The bolt, drawn by the widget
+
+Asked for again on 24.9.2026 once the colour lived in the widget: while
+charging, the bolt and not the frame. Without an icon theme of our own
+there is no second path to give a palette entry (§5e), and `color` still
+reaches frame and bolt together.
+
+So on a `-charging` icon the widget leaves `color` out of its rule and
+draws the image itself: GTK renders it into a surface of ours, the box
+around its ink says where the 16-unit icon landed, and inside a region
+around the bolt the icon's own coverage masks the power colour. The region
+goes through the gaps the SVGs leave: the frame stops at y 6 and x 10, the
+bolt starts at y 8 and x 9, and the level's diagonal runs 1.4 units below
+the bolt's. An ink box that is not 14 by 16 units is another shape, and is
+drawn uncoloured.
+
+What each part says now:
+
+| | while charging | on battery |
+|---|---|---|
+| frame | plain | drain (plain · amber · red) |
+| bolt | charging power (green · amber · red) | - |
+| filling | charge level | charge level; on the one-path icons above 20 % the more urgent colour takes the whole icon |
+
+The test renders for real and fails against the plugin before this change.
+`doc/make-states.py` does the same compositing for the chart in the README.
+Not yet seen in the running shell: that needs the reboot the plugin always
+needs (§14).
 
