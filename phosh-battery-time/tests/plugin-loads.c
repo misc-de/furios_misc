@@ -124,6 +124,13 @@ stand_in_type (const char *name, GType parent)
 }
 
 
+static void
+count_notify (int *count)
+{
+  (*count)++;
+}
+
+
 static GtkLabel *
 label_of (GtkWidget *widget)
 {
@@ -565,8 +572,23 @@ main (int argc, char *argv[])
 
   /* Switched off, or the panel torn down: the shell must be left as we
      found it. */
-  gtk_widget_destroy (widget);
-  g_object_unref (widget);
+  /* phosh takes an icon out of its box in three steps - find its index,
+     unparent it (where we are destroyed), drop that index - and it re-sorts
+     the same array whenever a priority changes. A priority changed during
+     the destroy therefore drops the wrong icon and leaves a freed one in the
+     bar (the crash of 25.9.). So: not one change while it goes. */
+  {
+    int during = 0;
+    gulong id = g_signal_connect_swapped (battery, "notify::priority",
+                                          G_CALLBACK (count_notify), &during);
+
+    gtk_widget_destroy (widget);
+    g_object_unref (widget);
+    check_int ("while it goes, the battery's priority is not touched", during, 0);
+    for (int i = 0; i < 50 && priority_of (battery) != DEFAULT_PRIORITY; i++)
+      g_main_context_iteration (NULL, FALSE);
+    g_signal_handler_disconnect (battery, id);
+  }
   check_int ("and when it goes, the battery has its priority back",
              priority_of (battery), DEFAULT_PRIORITY);
   {

@@ -135,6 +135,9 @@ typedef struct {
   GObject      *battery;
   int           battery_priority;
   gboolean      placed;
+  /* Destroyed: a placement still queued for an idle must not lower the
+     battery again after its priority went back. */
+  gboolean      gone;
 } FuriosBatteryTimeData;
 
 
@@ -178,19 +181,67 @@ get_data (gpointer self)
 }
 
 
+typedef struct {
+  GObject *battery;
+  int      priority;
+} PriorityBack;
+
+
+static gboolean
+on_idle_priority_back (gpointer user_data)
+{
+  PriorityBack *back = user_data;
+
+  /* Still in a bar: the box that sorts it is listening, and this is the one
+     moment it can safely re-sort. Out of every bar, there is nobody left to
+     tell - the next battery the shell builds starts at its own default. */
+  if (gtk_widget_get_parent (GTK_WIDGET (back->battery)) != NULL)
+    g_object_set (back->battery, "priority", back->priority, NULL);
+
+  return G_SOURCE_REMOVE;
+}
+
+
+static void
+priority_back_free (gpointer user_data)
+{
+  PriorityBack *back = user_data;
+
+  g_object_unref (back->battery);
+  g_free (back);
+}
+
+
 /* Give the battery its priority back. The widget is going - because the
    plugin was switched off, or because the shell is tearing the panel down -
    and either way the shell should be left as we found it. On destroy rather
    than on finalize, because somebody else may still hold a reference to a
-   widget the shell has already taken out of its bar. */
+   widget the shell has already taken out of its bar.
+ *
+ * NEVER from inside the destroy itself. phosh takes an icon out of its box
+ * in three steps: find its index, unparent it (and that is where we are
+ * destroyed), then drop that index from its array. A priority changed in
+ * between makes the box re-sort that very array, the index points at a
+ * different icon, the wrong one is dropped - and the freed one stays in the
+ * list for the next walk over the bar to fall on. That was the crash of
+ * 25.9. on every change to the status-icons list. So the value goes back
+ * from the next idle, when the box has finished. */
 static void
 give_the_battery_its_priority_back (FuriosBatteryTimeData *data)
 {
-  if (data->battery) {
-    if (has_prop (data->battery, "priority"))
-      g_object_set (data->battery, "priority", data->battery_priority, NULL);
-    g_clear_object (&data->battery);
+  PriorityBack *back;
+
+  if (data->battery == NULL)
+    return;
+
+  if (has_prop (data->battery, "priority")) {
+    back = g_new0 (PriorityBack, 1);
+    back->battery = g_object_ref (data->battery);
+    back->priority = data->battery_priority;
+    g_idle_add_full (G_PRIORITY_DEFAULT, on_idle_priority_back, back,
+                     priority_back_free);
   }
+  g_clear_object (&data->battery);
 }
 
 
@@ -220,6 +271,7 @@ on_destroy (GtkWidget *self)
   FuriosBatteryTimeData *data = get_data (self);
 
   if (data) {
+    data->gone = TRUE;
     give_the_battery_its_priority_back (data);
     uncolour_the_battery (data);
   }
@@ -645,7 +697,7 @@ take_place_beside_the_battery (GtkWidget *self)
   GType box_type;
   int priority = 0;
 
-  if (data == NULL || data->placed)
+  if (data == NULL || data->placed || data->gone)
     return;
 
   box_type = g_type_from_name (ICONS_BOX_TYPE_NAME);
@@ -728,19 +780,27 @@ on_changed (GtkWidget *self)
 /* The shell puts us into its box after building us. That is the moment the
    battery beside us can be found - whether or not there is a time to show,
    because the colour needs it just as much. */
-static void
-on_hierarchy_changed (GtkWidget *self, GtkWidget *previous_toplevel)
-{
-  take_place_beside_the_battery (self);
-}
-
-
 static gboolean
 on_idle_take_place (gpointer self)
 {
   take_place_beside_the_battery (self);
 
   return G_SOURCE_REMOVE;
+}
+
+
+/* Not from here directly: this fires from inside the box's own
+   gtk_widget_set_parent, before it has hooked up the icon it is adding, and
+   a priority changed in the middle of that is changed under its feet (see
+   give_the_battery_its_priority_back). The next idle is soon enough. */
+static void
+on_hierarchy_changed (GtkWidget *self, GtkWidget *previous_toplevel)
+{
+  FuriosBatteryTimeData *data = get_data (self);
+
+  if (data && !data->placed)
+    g_idle_add_full (G_PRIORITY_DEFAULT_IDLE, on_idle_take_place,
+                     g_object_ref (self), g_object_unref);
 }
 
 
