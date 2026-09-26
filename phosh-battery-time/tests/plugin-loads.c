@@ -485,6 +485,27 @@ main (int argc, char *argv[])
   write_file (state, "03:07\n", 6);
   check_true ("and again after that", settles_to (widget, "03:07", TRUE));
 
+  /* The runtime directory is everybody's: other programs' files come and
+     go in it every few seconds, and each one used to make the widget reload
+     both of its files inside the shell. The label is scribbled on here so a
+     reload shows: a widget that looks at a foreign file puts "03:07" back. */
+  {
+    g_autofree char *foreign = g_build_filename (runtime_dir, "somebody-else", NULL);
+    gint64 until = g_get_monotonic_time () + G_USEC_PER_SEC / 2;
+
+    gtk_label_set_text (label_of (widget), "untouched");
+    write_file (foreign, "x\n", 2);
+    g_remove (foreign);
+    while (g_get_monotonic_time () < until) {
+      g_main_context_iteration (NULL, FALSE);
+      g_usleep (10 * 1000);
+    }
+    check_true ("somebody else's file in the directory wakes nothing",
+                g_strcmp0 (gtk_label_get_text (label_of (widget)), "untouched") == 0);
+    write_file (state, "03:07\n", 6);
+    check_true ("but its own file still does", settles_to (widget, "03:07", TRUE));
+  }
+
   g_remove (state);
   check_true ("the file going away takes the time with it",
               settles_to (widget, NULL, FALSE));

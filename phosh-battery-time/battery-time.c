@@ -768,11 +768,35 @@ update_label (GtkWidget *self)
 }
 
 
+/*
+ * The monitor watches the whole runtime directory, and that directory is
+ * busy: sockets, locks and the temporary files of other programs come and go
+ * in it every few seconds (measured on 26.9.2026: well over a dozen foreign
+ * names a minute). Each of them used to reload both files, re-parse the
+ * stylesheet and redraw the battery, inside the shell's process. So only our
+ * two names count, and each only for its own half. The ".new" files battctl
+ * renames from do not count either: the rename arrives under the target's
+ * name.
+ */
 static void
-on_changed (GtkWidget *self)
+on_changed (GtkWidget         *self,
+            GFile             *file,
+            GFile             *other_file,
+            GFileMonitorEvent  event,
+            GFileMonitor      *monitor)
 {
-  update_label (self);
-  update_colour (self);
+  FuriosBatteryTimeData *data = get_data (self);
+
+  if (data == NULL || file == NULL)
+    return;
+
+  if (g_file_equal (file, data->file))
+    update_label (self);
+  else if (g_file_equal (file, data->colour_file))
+    update_colour (self);
+  else
+    return;
+
   take_place_beside_the_battery (self);
 }
 
