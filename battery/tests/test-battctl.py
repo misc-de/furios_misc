@@ -1706,6 +1706,19 @@ class TheIconInTheBar(Base):
         self.assertFalse(os.path.exists(b.PLUGIN_STATE + ".new"),
                          "the half-written file was left behind")
 
+    def test_the_same_time_again_is_not_written(self):
+        """Every rename wakes the widget inside phosh, and the daemon comes
+        here on every UPower signal - measured on 26.9.2026 at a rewrite
+        every 20 s for a time that had not moved."""
+        b.show_time("04:38")
+        inode = os.stat(b.PLUGIN_STATE).st_ino
+        self.assertTrue(b.show_time("04:38"))
+        self.assertEqual(inode, os.stat(b.PLUGIN_STATE).st_ino,
+                         "an unchanged time was written again")
+        b.show_time("04:37")
+        with open(b.PLUGIN_STATE) as fh:
+            self.assertEqual("04:37\n", fh.read())
+
     def test_no_time_takes_the_file_away(self):
         b.show_time("04:38")
         b.clear_time()

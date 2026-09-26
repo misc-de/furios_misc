@@ -648,8 +648,19 @@ def show_time(text, path=None):
     Beside the target and renamed, so the widget never reads half a line.
     The renaming is also why it watches the DIRECTORY: the inode changes
     with every write.
+
+    And only when the text changes. The daemon comes through here on every
+    UPower signal, every few seconds, and the minutes move far less often -
+    but every rename wakes the widget inside phosh's process, which reloads
+    both files and redraws the battery for a time it is already showing.
     """
     target = path or PLUGIN_STATE
+    try:
+        with open(target) as fh:
+            if fh.read(64) == text + "\n":
+                return True
+    except (OSError, UnicodeDecodeError):
+        pass
     tmp = target + ".new"
     try:
         os.makedirs(os.path.dirname(target), exist_ok=True)
