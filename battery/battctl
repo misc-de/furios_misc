@@ -1387,6 +1387,9 @@ class Daemon:
         # cached properties as the icon, so they cost no call of their own.
         self.time_to_full = 0
         self.time_to_empty = 0
+        # Whether the shell has been asked about the widget - see
+        # widget_note().
+        self.widget_checked = False
 
     @staticmethod
     def _stamp(path=None):
@@ -1410,6 +1413,22 @@ class Daemon:
         self.cfg_stamp = stamp
         self.cfg = load_config()
         return True
+
+    def widget_note(self):
+        """What to say about a widget the running shell has not loaded - or
+        None. Asked once per run, whatever the answer.
+
+        A widget the shell has not loaded shows nothing, and there is nothing
+        this program can do about that before the next boot, so it is said
+        once. And it is ASKED once: the question scans every process in /proc,
+        16 ms of CPU on this phone, and it used to be asked again on every
+        UPower signal for as long as the answer was "loaded" - the healthy
+        case, all day.
+        """
+        if self.widget_checked:
+            return None
+        self.widget_checked = True
+        return None if plugin_live() else time_shown_as()
 
     def sample(self, now=None, reading=None):
         now = time.time() if now is None else now
@@ -1568,10 +1587,6 @@ def cmd_daemon(_argv):
     # then remembered, so an ordinary tick asks dconf nothing.
     plugin_on = PLUGIN_ID in plugin_names(plugins)
     daemon = Daemon()
-    # A widget the running shell has not loaded shows nothing, and there is
-    # nothing this program can do about that before the next boot - said
-    # once, not on every tick.
-    told_not_live = False
     # Whatever an older version left on this phone: its themes, its icon
     # theme and the percentage it took. Only our own names are touched.
     if clean_up_leftovers():
@@ -1584,7 +1599,7 @@ def cmd_daemon(_argv):
         """The widget in phosh's bar is what shows both the colour and the
         time, so it is listed while any option is on and taken out when
         none is."""
-        nonlocal plugin_on, told_not_live
+        nonlocal plugin_on
         if not plugin_wanted(daemon.cfg):
             if plugin_on:
                 unlist_plugin(plugins)
@@ -1604,10 +1619,9 @@ def cmd_daemon(_argv):
                 print("could not add %s to %s - no colour and no time"
                       % (PLUGIN_ID, PLUGIN_SETTING), file=sys.stderr,
                       flush=True)
-        if not told_not_live and not plugin_live():
-            told_not_live = True
-            print("shown by: %s" % time_shown_as(), file=sys.stderr,
-                  flush=True)
+        note = daemon.widget_note()
+        if note:
+            print("shown by: %s" % note, file=sys.stderr, flush=True)
         text = daemon.runtime() if time_wanted(daemon.last_reading,
                                                daemon.cfg) else None
         if text:

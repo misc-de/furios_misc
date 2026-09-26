@@ -1779,6 +1779,32 @@ class TheIconInTheBar(Base):
         self.assertIn("reboot", words)
         self.assertNotIn("systemctl", words)
 
+    def test_the_daemon_asks_the_shell_once_and_not_on_every_tick(self):
+        """The question scans all of /proc - 16 ms of CPU on the phone - and
+        a loaded widget, the healthy case, used to be asked about again on
+        every UPower signal."""
+        asked = []
+        real = b.plugin_live
+        b.plugin_live = lambda *a, **k: asked.append(1) or True
+        try:
+            daemon = b.Daemon(cfg=dict(b.DEFAULTS))
+            for _ in range(3):
+                self.assertIsNone(daemon.widget_note())
+        finally:
+            b.plugin_live = real
+        self.assertEqual(1, len(asked))
+
+    def test_and_says_it_once_when_the_widget_is_not_loaded(self):
+        self.plugin_file(when=3000.0)
+        real = b.plugin_live
+        b.plugin_live = lambda *a, **k: False
+        try:
+            daemon = b.Daemon(cfg=dict(b.DEFAULTS))
+            self.assertIn("reboot", daemon.widget_note() or "")
+            self.assertIsNone(daemon.widget_note())
+        finally:
+            b.plugin_live = real
+
     # --- putting things back ------------------------------------------
 
     def test_reset_takes_the_icon_out_of_the_bar(self):
