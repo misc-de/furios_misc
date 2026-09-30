@@ -614,32 +614,83 @@ def plugin_names(setting=None):
     return [n for n in names if isinstance(n, str)]
 
 
-def set_plugin_names(names, setting=None):
+def set_plugin_names(names, setting=None, follow_default=True):
     """Write that list back, in the form gsettings reads."""
     text = "[%s]" % ", ".join("'%s'" % n for n in names) if names else "@as []"
-    return (setting or plugin_setting()).set(text)
+    return (setting or plugin_setting()).set(text, follow_default)
 
 
-def list_plugin(setting=None):
+# The plugin list is the one desktop setting this program writes, and the
+# rule for it is the rule for every change here: before the FIRST change,
+# write down what was there - in state.json, as
+#
+#   "plugins_before": {"set": true|false, "names": [...]}
+#
+# "set" is whether the key had a value of its own in dconf or followed the
+# default. It matters: a key written with the default value is pinned and
+# stops following an update's default, so "was unset" has to be put back as
+# `gsettings reset`, never as a written copy of what the default is today.
+#
+# Putting back reads the record, not an assumption: the list goes back to
+# exactly what was there - but only while it is still ours, i.e. the recorded
+# list plus our entry. If somebody changed the list since, only our entry is
+# taken out and the rest of their list stays; the record cannot know what
+# they want. No record (listed by a version before 30.9.2026, or the state
+# could not be read) falls back to what it always did - our entry out, and
+# the key reset if the rest is the shipped list - and says so.
+PLUGINS_BEFORE = "plugins_before"
+
+
+def list_plugin(setting=None, state_path=None):
     """Have the shell load our icon, without disturbing anybody else's.
 
     The key holds other people's plugins too, so it is read, changed and
-    written - never set to a list of our own making.
+    written - never set to a list of our own making. What was there is
+    written down first (see above), once.
     """
     setting = setting or plugin_setting()
     names = plugin_names(setting)
     if PLUGIN_ID in names:
         return True
+    state = load_state(state_path)
+    if PLUGINS_BEFORE not in state:
+        was_set = setting.is_set()
+        if was_set is not None:
+            state[PLUGINS_BEFORE] = {"set": was_set, "names": names}
+            save_state(state, state_path)
     return set_plugin_names(names + [PLUGIN_ID], setting)
 
 
-def unlist_plugin(setting=None):
-    """Take it out again, and leave the rest of the list alone."""
+def unlist_plugin(setting=None, state_path=None, say=None):
+    """Take it out again: back to the recorded list while the list is still
+    ours, otherwise only our entry out. `say` receives what is worth telling
+    somebody (the fallback without a record, a list changed since)."""
     setting = setting or plugin_setting()
+    say = say or (lambda text: print(text, file=sys.stderr, flush=True))
     names = plugin_names(setting)
+    state = load_state(state_path)
+    before = state.pop(PLUGINS_BEFORE, None)
     if PLUGIN_ID not in names:
+        # Taken out already - by us, or by somebody, whose list it is now.
+        if before is not None:
+            save_state(state, state_path)
         return True
-    return set_plugin_names([n for n in names if n != PLUGIN_ID], setting)
+    rest = [n for n in names if n != PLUGIN_ID]
+    if before is None:
+        say("no record of %s before our entry (added before 30.9.2026) - "
+            "took our entry out, and reset the key if the rest is the "
+            "shipped list" % PLUGIN_SETTING)
+        return set_plugin_names(rest, setting)
+    if rest == before["names"]:
+        ok = (set_plugin_names(rest, setting, follow_default=False)
+              if before["set"] else setting.reset())
+    else:
+        say("%s was changed since our entry went in - took out only ours, "
+            "the rest stays as it is now" % PLUGIN_SETTING)
+        ok = set_plugin_names(rest, setting, follow_default=False)
+    if ok:
+        save_state(state, state_path)
+    return ok
 
 
 def show_time(text, path=None):
@@ -1036,7 +1087,12 @@ class Setting:
             return ""
         return out.stdout.strip().strip("'")
 
-    def set(self, name):
+    def set(self, name, follow_default=True):
+        """Write a value. `follow_default` resets the key when the value is
+        the shipped one (see reset_if_shipped) - right for the keys an older
+        version left behind without a record, wrong for putting back a key
+        the record says was SET: then the value goes back exactly, pinned
+        as it was, even if it equals the default."""
         if self.file_:
             with open(self.file_, "w") as fh:
                 fh.write(name + "\n")
@@ -1049,8 +1105,48 @@ class Setting:
             return False
         if out.returncode != 0:
             return False
-        self.reset_if_shipped()
+        if follow_default:
+            self.reset_if_shipped()
         return True
+
+    def is_set(self):
+        """True when the key has a value of its own in dconf, False when it
+        is unset and follows the default, None when that cannot be told.
+
+        `gsettings get` cannot answer this - it prints the default for an
+        unset key, and a key written with the default value looks the same.
+        Gio can: get_user_value() is None exactly when nothing is written.
+        In the tests the file stands for dconf, so its absence is "unset".
+        """
+        if self.file_:
+            return os.path.exists(self.file_)
+        try:
+            import gi
+            gi.require_version("Gio", "2.0")
+            from gi.repository import Gio
+            schema, key = self.key.split()
+            source = Gio.SettingsSchemaSource.get_default()
+            if source is None or source.lookup(schema, True) is None:
+                return None
+            return Gio.Settings.new(schema).get_user_value(key) is not None
+        except (ImportError, ValueError, TypeError, AttributeError):
+            return None
+
+    def reset(self):
+        """Unset the key: it follows the default again, the way it did
+        before anybody wrote it."""
+        if self.file_:
+            try:
+                os.remove(self.file_)
+            except FileNotFoundError:
+                pass
+            return True
+        try:
+            out = subprocess.run(["gsettings", "reset"] + self.key.split(),
+                                 capture_output=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return out.returncode == 0
 
     def reset_if_shipped(self):
         """A value that is the shipped default goes back to BEING the default.
@@ -1350,6 +1446,16 @@ def cmd_reset(_argv):
     ok = unlist_plugin() and ok
     clean_up_leftovers()
     return 0 if ok else 1
+
+
+def cmd_unlist(_argv):
+    """Our entry out of phosh's plugin list, back to what the record says.
+
+    For phosh-battery-time/uninstall.sh: the record lives here, in battctl's
+    state, and the widget's uninstall must put the list back from it rather
+    than guess. Nothing else is touched.
+    """
+    return 0 if unlist_plugin() else 1
 
 
 def cmd_restore(_argv):
@@ -2045,6 +2151,8 @@ USAGE = """battctl - colour phosh's battery icon by charge power
   battctl daemon              the loop; this is what the service runs
   battctl reset               no colour, no time, the widget out of the bar
   battctl restore             reset, plus remove the config
+  battctl unlist              only the widget out of phosh's plugin list,
+                              back to the list recorded before it went in
 
 Everything is off after an install. Both the colour and the time are shown
 by the widget in phosh's bar (phosh-battery-time), which colours the battery
@@ -2065,7 +2173,8 @@ def main(argv=None):
     command, rest = argv[0], argv[1:]
     for name, fn in (("status", cmd_status), ("config", cmd_config),
                      ("daemon", cmd_daemon), ("reset", cmd_reset),
-                     ("restore", cmd_restore), ("watch", cmd_watch),
+                     ("restore", cmd_restore), ("unlist", cmd_unlist),
+                     ("watch", cmd_watch),
                      ("summarise", cmd_summarise), ("summarize", cmd_summarise)):
         if command == name:
             return fn(rest)

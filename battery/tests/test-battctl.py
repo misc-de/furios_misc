@@ -1736,6 +1736,96 @@ class TheIconInTheBar(Base):
         b.list_plugin()
         self.assertEqual(["furios-battery-time"], self.listed())
 
+    # --- the record of the list before our entry ----------------------
+    #
+    # The file stands for dconf: there = the key has a value of its own,
+    # gone = unset, following the default. The rule under test: what was
+    # there before the FIRST change is written down, and taking our entry out
+    # puts back exactly that - "unset" as unset, not as a pinned copy.
+
+    def raw(self):
+        try:
+            with open(self.plugin_setting) as fh:
+                return fh.read()
+        except FileNotFoundError:
+            return None
+
+    def quiet_unlist(self):
+        said = []
+        self.assertTrue(b.unlist_plugin(say=said.append))
+        return said
+
+    def test_an_unset_key_is_unset_again_not_a_copy_of_the_default(self):
+        os.remove(self.plugin_setting)
+        b.list_plugin()
+        self.assertEqual(["furios-battery-time"], self.listed())
+        self.assertEqual([], self.quiet_unlist())
+        self.assertIsNone(self.raw(), "the key must be reset, not written")
+        self.assertNotIn(b.PLUGINS_BEFORE, b.load_state())
+
+    def test_a_key_set_to_the_default_stays_set(self):
+        """Somebody wrote the default on purpose - pinned. Resetting it
+        would be our guess replacing their decision."""
+        b.list_plugin()
+        self.quiet_unlist()
+        self.assertEqual("@as []\n", self.raw())
+
+    def test_a_list_of_somebody_elses_comes_back_exactly(self):
+        b.set_plugin_names(["ticket-box", "pomodoro"])
+        before = self.raw()
+        b.list_plugin()
+        self.quiet_unlist()
+        self.assertEqual(before, self.raw())
+
+    def test_the_first_record_stands(self):
+        """A second list must not write down our own change as the
+        original: here the entry vanished behind our back and comes again."""
+        os.remove(self.plugin_setting)
+        b.list_plugin()
+        first = b.load_state()[b.PLUGINS_BEFORE]
+        b.set_plugin_names([])            # somebody took it out by hand
+        b.list_plugin()
+        self.assertEqual(first, b.load_state()[b.PLUGINS_BEFORE])
+
+    def test_a_list_changed_since_keeps_their_change(self):
+        os.remove(self.plugin_setting)
+        b.list_plugin()
+        b.set_plugin_names(["furios-battery-time", "caffeine"])
+        said = self.quiet_unlist()
+        self.assertEqual(["caffeine"], self.listed())
+        self.assertTrue(any("changed since" in z for z in said))
+        self.assertNotIn(b.PLUGINS_BEFORE, b.load_state())
+
+    def test_our_entry_taken_out_by_somebody_is_left_alone(self):
+        b.set_plugin_names(["ticket-box"])
+        b.list_plugin()
+        b.set_plugin_names(["other"])     # their list now, ours not in it
+        self.assertEqual([], self.quiet_unlist())
+        self.assertEqual(["other"], self.listed())
+        self.assertNotIn(b.PLUGINS_BEFORE, b.load_state())
+
+    def test_without_a_record_the_old_way_and_it_says_so(self):
+        b.set_plugin_names(["furios-battery-time"])   # listed before 30.9.
+        said = self.quiet_unlist()
+        self.assertEqual([], self.listed())
+        self.assertTrue(any("no record" in z for z in said))
+
+    def test_no_record_is_invented_when_the_key_cannot_be_asked(self):
+        real = b.Setting.is_set
+        b.Setting.is_set = lambda self: None
+        try:
+            b.list_plugin()
+        finally:
+            b.Setting.is_set = real
+        self.assertNotIn(b.PLUGINS_BEFORE, b.load_state())
+
+    def test_unlist_is_what_the_widgets_uninstall_calls(self):
+        os.remove(self.plugin_setting)
+        b.list_plugin()
+        with redirect_stderr(io.StringIO()):
+            self.assertEqual(0, b.main(["unlist"]))
+        self.assertIsNone(self.raw())
+
     # --- the file the widget reads ------------------------------------
 
     def test_a_time_is_written_whole_or_not_at_all(self):
