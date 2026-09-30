@@ -2,9 +2,15 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 misc-de
 # SPDX-License-Identifier: MIT
 #
-# Installs into the user's home. No root anywhere: this reads files in /sys,
-# writes two small files in the runtime directory and adds the widget to
-# phosh's plugin list - all of it things the session may do anyway. NEVER start it with sudo.
+# Installs battctl into the user's home, and the widget that shows what it
+# computes - phosh-battery-time, next door - into phosh's plugin directory.
+# battctl itself needs no root: it reads files in /sys, writes two small
+# files in the runtime directory and adds the widget to phosh's plugin list.
+# The widget's `sudo make install` is the one line that asks. Without the
+# widget there is nothing on screen at all - neither the colour nor the time
+# (found on 30.9.2026: battctl listed a widget that was never installed, and
+# phosh said "Custom status-icon 'furios-battery-time' not found").
+# NEVER start it with sudo.
 set -euo pipefail
 
 if [ "$(id -u)" = 0 ]; then
@@ -22,6 +28,14 @@ import gi
 gi.require_version("Gio", "2.0")
 from gi.repository import Gio, GLib  # noqa: F401
 CHECK
+# What the widget's build needs - asked here, before anything is installed,
+# rather than by its own installer half-way through.
+command -v cc >/dev/null || missing+=("a C compiler (apt install build-essential)")
+command -v make >/dev/null || missing+=("make (apt install build-essential)")
+pkg-config --exists phosh-plugins 2>/dev/null \
+    || missing+=("phosh's plugin headers (apt install phosh-dev)")
+pkg-config --exists gtk+-3.0 2>/dev/null \
+    || missing+=("GTK 3 headers (apt install libgtk-3-dev)")
 if [ ${#missing[@]} -gt 0 ]; then
     printf 'Missing: %s\n' "${missing[@]}" >&2
     echo "Nothing was installed." >&2
@@ -51,6 +65,14 @@ rec_install 0644 "$SRC/systemd/furios-battery-color.service" \
     "$UNIT/furios-battery-color.service" battctl
 rec_install 0644 "$SRC/README.md" "$DOC/README.md" battctl
 rec_install 0644 "$SRC/FINDINGS.md" "$DOC/FINDINGS.md" battctl
+
+# The widget. FURIOS_BATTERY_WIDGET=skip is for the tests that look at
+# battctl on a phone without it.
+if [ "${FURIOS_BATTERY_WIDGET:-install}" != skip ]; then
+    echo
+    "$SRC/../phosh-battery-time/install.sh"
+    echo
+fi
 
 systemctl --user daemon-reload
 # Installed, not started. Unlike the other projects here this one changes how

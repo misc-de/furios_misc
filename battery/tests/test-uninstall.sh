@@ -167,9 +167,12 @@ scenario() {
         unset FURIOS_BATTERY_CONFIG FURIOS_BATTERY_STATE FURIOS_BATTERY_PLUGIN_STATE \
               FURIOS_BATTERY_COLOUR_STATE FURIOS_BATTERY_THEMES
         export PATH=$TMP/bin:$REAL_PATH
-        bash "$BATTERY/install.sh" >/dev/null 2>&1 || echo "battery/install.sh failed" >&2
-        [ "$3" = yes ] && { bash "$PLUGIN/install.sh" >/dev/null 2>&1 \
-            || echo "phosh-battery-time/install.sh failed" >&2; }
+        # The widget comes with battctl's installer since 30.9.2026; the
+        # scenarios without it ask it to be left out.
+        [ "$3" = yes ] || export FURIOS_BATTERY_WIDGET=skip
+        bash "$BATTERY/install.sh" >/dev/null 2>&1
+        echo $? > "$SANDBOX/install-rc"
+        unset FURIOS_BATTERY_WIDGET
         # Everything somebody can switch on, and what the daemon writes while
         # it runs (it is not started here: it would colour the real bar). Its
         # entry in phosh's list is what the daemon adds when it shows a time.
@@ -188,19 +191,19 @@ scenario() {
         mkdir -p "$HOME/.local/bin/__pycache__"
         : > "$HOME/.local/bin/__pycache__/battctlcpython-313.pyc"
         find "$SANDBOX/root" -name 'libphosh-plugin-*' -type f | wc -l > "$SANDBOX/plugin-files"
-        # Either order: each uninstall.sh has to put phosh's list back alone.
+        # The widget's own uninstall.sh first, or only battctl's (which then
+        # runs the widget's): phosh's list has to come back either way.
         if [ "${4:-}" = widget-first ]; then
             bash "$PLUGIN/uninstall.sh" >"$SANDBOX/out" 2>&1 \
                 || echo "phosh-battery-time/uninstall.sh failed" >&2
         fi
         SANDBOX_NO_BUS=$2 bash "$BATTERY/uninstall.sh" >>"$SANDBOX/out" 2>&1 \
             || echo "battery/uninstall.sh failed" >&2
-        if [ "$3" = yes ] && [ "${4:-}" != widget-first ]; then
-            bash "$PLUGIN/uninstall.sh" >>"$SANDBOX/out" 2>&1 \
-                || echo "phosh-battery-time/uninstall.sh failed" >&2
-        fi
+        # Otherwise battctl's uninstall.sh takes the widget out itself -
+        # it came with battctl's installer.
     )
     after=$(snapshot)
+    check "$1: install.sh succeeded" "0" "$(cat "$SANDBOX/install-rc")"
     [ "$3" = yes ] && check "$1: the plugin went into phosh's directory" \
         "1" "$(tr -d ' ' < "$SANDBOX/plugin-files")"
     check "$1: everything is as before install.sh" "" \

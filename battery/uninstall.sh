@@ -29,6 +29,15 @@ rm -f "$UNIT"/*.wants/furios-battery-color.service
 # did to the themes and the percentage put back, config and state deleted.
 # Through the checkout's copy when the installed one is already gone.
 if [ -x "$BIN/battctl" ]; then "$BIN/battctl" restore; else "$SRC/battctl" restore; fi
+
+# The widget went in with battctl, so it goes out with it - while battctl and
+# its record of phosh's list are still here for the widget's uninstall.sh to
+# use. Only one this installer put there (it has an install record);
+# somebody's own build of it is theirs to take out.
+WIDGET_REC="${XDG_CONFIG_HOME:-$HOME/.config}/furios-battery-time/install-record"
+if [ -d "$WIDGET_REC" ] && [ -x "$SRC/../phosh-battery-time/uninstall.sh" ]; then
+    "$SRC/../phosh-battery-time/uninstall.sh"
+fi
 # The installed files go back to what install.sh found before its first run,
 # from the record it wrote then: gone where nothing was, the earlier file
 # where there was one, left alone where somebody changed ours since. Without

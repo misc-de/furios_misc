@@ -1752,7 +1752,12 @@ def cmd_daemon(_argv):
                 daemon.last_change = 0.0
                 daemon.apply((None, None))
             return
-        if not plugin_on:
+        if not plugin_on and plugin_installed() is None:
+            # Listing a widget that is not there shows nothing and makes the
+            # shell log "Custom status-icon ... not found" - said once here
+            # instead, through widget_note below.
+            pass
+        elif not plugin_on:
             if list_plugin(plugins):
                 plugin_on = True
                 print("the widget is in the bar's list", flush=True)
