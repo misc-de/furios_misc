@@ -33,11 +33,24 @@ BIN="$HOME/.local/bin"
 UNIT="$HOME/.config/systemd/user"
 DOC="$HOME/.local/share/doc/furios-battery"
 
-install -d "$BIN" "$UNIT" "$DOC"
-install -m 0755 "$SRC/battctl" "$BIN/battctl"
-install -m 0644 "$SRC/systemd/furios-battery-color.service" \
-    "$UNIT/furios-battery-color.service"
-install -m 0644 "$SRC/README.md" "$SRC/FINDINGS.md" "$DOC/"
+# The install record: what each path held before the first install, so that
+# uninstall.sh puts exactly that back rather than assuming there was nothing
+# (install-record.sh explains it). Beside battctl's own state, which
+# uninstall.sh removes after using it.
+REC_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/furios-battery/install-record"
+# shellcheck source=install-record.sh
+. "$SRC/install-record.sh"
+
+install -d "$BIN" "$UNIT"
+rec_dir "$DOC"
+install -d "$DOC"
+# The mark is a word every version of that file carries: a file of ours from
+# an install before records existed is told apart from somebody else's by it.
+rec_install 0755 "$SRC/battctl" "$BIN/battctl" battctl
+rec_install 0644 "$SRC/systemd/furios-battery-color.service" \
+    "$UNIT/furios-battery-color.service" battctl
+rec_install 0644 "$SRC/README.md" "$DOC/README.md" battctl
+rec_install 0644 "$SRC/FINDINGS.md" "$DOC/FINDINGS.md" battctl
 
 systemctl --user daemon-reload
 # Installed, not started. Unlike the other projects here this one changes how
