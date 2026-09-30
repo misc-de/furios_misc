@@ -35,9 +35,20 @@ echo "1) building"
 make -C "$SRC" all
 
 echo "2) installing"
-sudo make -C "$SRC" install
-
 DIR=$(pkg-config --variable=status_icons_plugins_dir phosh-plugins)
+# What phosh's plugin directory held at our two paths before the first
+# install, written down before make writes there - so that uninstall.sh puts
+# exactly that back (install-record.sh explains the record). In the home:
+# reading /usr/lib needs no root, and the record is this user's install.
+# DESTDIR only for the tests, which install into a sandbox.
+REC_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/furios-battery-time/install-record"
+# shellcheck source=install-record.sh
+. "$SRC/install-record.sh"
+TARGETS=("${DESTDIR:-}$DIR/libphosh-plugin-furios-battery-time.so"
+         "${DESTDIR:-}$DIR/furios-battery-time.plugin")
+for t in "${TARGETS[@]}"; do rec_before "$t" furios-battery-time; done
+sudo make -C "$SRC" install DESTDIR="${DESTDIR:-}"
+for t in "${TARGETS[@]}"; do rec_after "$t"; done
 echo
 echo "Installed in $DIR."
 # Installed, not switched on: the icon appears when battctl's "time left" or
