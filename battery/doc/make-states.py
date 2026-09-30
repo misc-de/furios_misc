@@ -21,17 +21,17 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gtk  # noqa: E402
 import cairo  # noqa: E402
 
-HIER = os.path.dirname(os.path.abspath(__file__))
-WURZEL = os.path.dirname(HIER)
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
 
 
 def battctl():
-    lader = importlib.machinery.SourceFileLoader(
-        "battctl", os.path.join(WURZEL, "battctl"))
-    spec = importlib.util.spec_from_loader("battctl", lader)
-    modul = importlib.util.module_from_spec(spec)
-    lader.exec_module(modul)
-    return modul
+    loader = importlib.machinery.SourceFileLoader(
+        "battctl", os.path.join(ROOT, "battctl"))
+    spec = importlib.util.spec_from_loader("battctl", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
 
 
 b = battctl()
@@ -179,6 +179,6 @@ def draw(target):
 
 
 if __name__ == "__main__":
-    target = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HIER,
+    target = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE,
                                                               "states.png")
     print(draw(target))

@@ -16,7 +16,7 @@ fi
 # computed and never shown, and a tool that installs cleanly and then does
 # nothing is harder to understand than one that refuses.
 missing=()
-command -v gsettings >/dev/null || missing+=("gsettings (Paket libglib2.0-bin)")
+command -v gsettings >/dev/null || missing+=("gsettings (apt install libglib2.0-bin)")
 python3 - <<'CHECK' 2>/dev/null || missing+=("python3-gi")
 import gi
 gi.require_version("Gio", "2.0")

@@ -31,9 +31,9 @@ def load():
     loader = importlib.machinery.SourceFileLoader("battctl",
                                                   os.path.join(ROOT, "battctl"))
     spec = importlib.util.spec_from_loader("battctl", loader)
-    modul = importlib.util.module_from_spec(spec)
-    loader.exec_module(modul)
-    return modul
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
 
 
 b = load()
@@ -131,7 +131,7 @@ class Base(unittest.TestCase):
                 os.unlink(os.path.join(folder, file_))
             os.rmdir(folder)
 
-    # -- Helfer ------------------------------------------------------------
+    # -- helpers -----------------------------------------------------------
     def battery(self, status="Charging", ampere=1.2, volt=4.3, percent=80,
                 charge=None, full=None, avg=None):
         """The four attributes the colour needs, plus the three the time
@@ -146,10 +146,10 @@ class Base(unittest.TestCase):
                  "current_now": str(int(ampere * 1e6)),
                  "voltage_now": str(int(volt * 1e6)),
                  "capacity": str(percent)}
-        for name, wert in (("charge_counter", charge), ("charge_full", full),
+        for name, value in (("charge_counter", charge), ("charge_full", full),
                            ("current_avg", avg)):
-            if wert is not None:
-                values[name] = str(int(wert))
+            if value is not None:
+                values[name] = str(int(value))
         for name, value in values.items():
             with open(os.path.join(self.sysfs, name), "w") as fh:
                 fh.write(value + "\n")
@@ -212,7 +212,7 @@ class Reading(Base):
     def test_an_unreadable_value_is_none(self):
         self.battery()
         with open(os.path.join(self.sysfs, "current_now"), "w") as fh:
-            fh.write("keine zahl\n")
+            fh.write("not a number\n")
         self.assertIsNone(b.read_battery())
 
     def test_the_sign_is_thrown_away(self):
@@ -469,7 +469,7 @@ class IconFamilies(Base):
                          "red")
 
     def test_the_name_phosh_draws(self):
-        """Nicht UPowers `icon-name`: phosh baut
+        """Not UPower's `icon-name`: phosh builds
         "battery-level-%d-symbolic" itself, and the two files are not even
         built the same way."""
         self.assertEqual(b.phosh_icon(87, False), "battery-level-90-symbolic")
@@ -521,7 +521,7 @@ class TheSetting(Base):
         os.unlink(self.setting)
         self.assertEqual(b.Setting().get(), "")
 
-    def _fake_gsettings(self, rc=0, ausgabe="'adw-gtk3'"):
+    def _fake_gsettings(self, rc=0, output="'adw-gtk3'"):
         """A gsettings on PATH, so the path the phone really takes is tested
         and not only the file the tests use."""
         bin_dir = os.path.join(self.tmp, "bin")
@@ -530,26 +530,26 @@ class TheSetting(Base):
         with open(path, "w") as fh:
             fh.write("#!/bin/sh\n"
                      'if [ "$1" = get ]; then echo "%s"; fi\n'
-                     "echo \"$@\" >> %s/aufrufe\n"
-                     "exit %d\n" % (ausgabe, self.tmp, rc))
+                     "echo \"$@\" >> %s/calls\n"
+                     "exit %d\n" % (output, self.tmp, rc))
         os.chmod(path, 0o755)
         os.environ.pop("FURIOS_BATTERY_SETTING_FILE", None)
         os.environ["PATH"] = bin_dir + ":" + os.environ["PATH"]
-        return os.path.join(self.tmp, "aufrufe")
+        return os.path.join(self.tmp, "calls")
 
     def test_the_real_gsettings_reads_and_writes(self):
-        aufrufe = self._fake_gsettings()
+        calls = self._fake_gsettings()
         s = b.Setting()
         self.assertEqual(s.get(), "adw-gtk3")
         self.assertTrue(s.set("adw-gtk3-batt-green"))
-        rows = open(aufrufe).read()
+        rows = open(calls).read()
         self.assertIn("get org.gnome.desktop.interface gtk-theme", rows)
         self.assertIn("set org.gnome.desktop.interface gtk-theme "
                       "adw-gtk3-batt-green", rows)
 
     def test_a_failed_gsettings_says_so(self):
         self._fake_gsettings(rc=3)
-        self.assertFalse(b.Setting().set("egal"))
+        self.assertFalse(b.Setting().set("whatever"))
 
     def test_a_missing_gsettings_does_not_crash(self):
         bin_dir = os.path.join(self.tmp, "empty")
@@ -558,7 +558,7 @@ class TheSetting(Base):
         os.environ["PATH"] = bin_dir
         s = b.Setting()
         self.assertEqual(s.get(), "")
-        self.assertFalse(s.set("egal"))
+        self.assertFalse(s.set("whatever"))
 
 
 class Config(Base):
@@ -578,14 +578,14 @@ class Config(Base):
 
     def test_foreign_keys_are_ignored(self):
         with open(b.CONFIG, "w") as fh:
-            json.dump({"charge_green_w": 8.0, "unsinn": 1}, fh)
+            json.dump({"charge_green_w": 8.0, "nonsense": 1}, fh)
         cfg = b.load_config()
         self.assertEqual(cfg["charge_green_w"], 8.0)
-        self.assertNotIn("unsinn", cfg)
+        self.assertNotIn("nonsense", cfg)
 
     def test_a_wrong_type_is_ignored(self):
         with open(b.CONFIG, "w") as fh:
-            json.dump({"charge_green_w": "viel"}, fh)
+            json.dump({"charge_green_w": "lots"}, fh)
         self.assertEqual(b.load_config()["charge_green_w"],
                          b.DEFAULTS["charge_green_w"])
 
@@ -608,7 +608,7 @@ class Commands(Base):
             self.assertIn("battctl status", out)
 
     def test_an_unknown_command(self):
-        rc, _, err = self.run_cmd("fliegen")
+        rc, _, err = self.run_cmd("fly")
         self.assertEqual(rc, 2)
         self.assertIn("Unknown command", err)
 
@@ -631,11 +631,11 @@ class Commands(Base):
         # the thresholds this test is here for.
         b.save_config(self.cfg_on())
         rc, out, _ = self.run_cmd("status", "--json")
-        daten = json.loads(out)
+        data = json.loads(out)
         self.assertEqual(rc, 0)
-        self.assertEqual(daten["bucket"], "green")
-        self.assertEqual(daten["showing"], "none")
-        self.assertNotIn("theme", daten)
+        self.assertEqual(data["bucket"], "green")
+        self.assertEqual(data["showing"], "none")
+        self.assertNotIn("theme", data)
 
     def test_status_knows_the_running_colour(self):
         self.battery(ampere=0.2, volt=4.2)
@@ -670,11 +670,11 @@ class Commands(Base):
         self.assertIsInstance(b.load_config()["dwell_s"], int)
 
     def test_config_refuses_nonsense(self):
-        for argv in (("config", "discharging", "vielleicht"),
-                     ("config", "charge_green_w", "viel"),
+        for argv in (("config", "discharging", "maybe"),
+                     ("config", "charge_green_w", "lots"),
                      ("config", "charge_green_w", "-3"),
-                     ("config", "gibt_es_nicht", "1"),
-                     ("config", "zu", "viele", "worte")):
+                     ("config", "does_not_exist", "1"),
+                     ("config", "too", "many", "words")):
             rc, _, err = self.run_cmd(*argv)
             self.assertEqual(rc, 2, argv)
             self.assertTrue(err)
@@ -734,11 +734,11 @@ class Logging(Base):
 
     def test_quantile(self):
         values = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-        self.assertEqual(b.quantil(values, 0.5), 6)
-        self.assertEqual(b.quantil(values, 0.9), 9)
-        self.assertEqual(b.quantil(values, 1.0), 10)
-        self.assertEqual(b.quantil([7], 0.9), 7)
-        self.assertIsNone(b.quantil([], 0.5))
+        self.assertEqual(b.quantile(values, 0.5), 6)
+        self.assertEqual(b.quantile(values, 0.9), 9)
+        self.assertEqual(b.quantile(values, 1.0), 10)
+        self.assertEqual(b.quantile([7], 0.9), 7)
+        self.assertIsNone(b.quantile([], 0.5))
 
     def test_writes_rows_and_a_summary(self):
         self.battery(status="Discharging", ampere=0.5, volt=3.9)
@@ -751,31 +751,31 @@ class Logging(Base):
         self.assertIn("median", out)
         rows = open(path).read().splitlines()
         self.assertGreater(len(rows), 1)
-        self.assertTrue(rows[1].startswith("2"))      # ISO-Datum
+        self.assertTrue(rows[1].startswith("2"))      # ISO date
 
     def test_a_wobbling_run_says_so_itself(self):
         """A calibration run on a worn port should say so rather than hand
         over a median of noise."""
         self.battery(status="Charging", ampere=1.2, volt=4.3)
 
-        echte_battery = self.battery
+        real_battery = self.battery
         counter = {"n": 0}
 
-        def wechselnd(*a, **kw):
+        def alternating(*a, **kw):
             counter["n"] += 1
-            echte_battery(status="Charging" if counter["n"] % 2 else
+            real_battery(status="Charging" if counter["n"] % 2 else
                           "Discharging", ampere=1.2, volt=4.3)
 
         # The state changes between readings.
         import threading
         stop = threading.Event()
 
-        def ruettler():
+        def shaker():
             while not stop.is_set():
-                wechselnd()
+                alternating()
                 stop.wait(0.02)
 
-        t = threading.Thread(target=ruettler)
+        t = threading.Thread(target=shaker)
         t.start()
         try:
             _rc, out, _ = self.run_cmd("watch", "0.4", "--interval", "0.05")
@@ -790,21 +790,21 @@ class Logging(Base):
         self.assertEqual(rc, 0)
         self.assertNotIn("Discharging:", out)
 
-    # -------------------------------------------------- Auswertung
+    # ------------------------------------------------- summarising
 
     def log(self, rows):
         path = os.path.join(self.tmp, "log.csv")
         with open(path, "w") as fh:
             fh.write("time,state,watt,percent,screen\n")
-            for i, (state, watt, licht) in enumerate(rows):
+            for i, (state, watt, screen) in enumerate(rows):
                 fh.write("2026-09-15T12:%02d:00,%s,%.3f,80,%s\n"
-                         % (i % 60, state, watt, licht))
+                         % (i % 60, state, watt, screen))
         return path
 
     def test_reads_past_broken_rows(self):
         path = self.log([("Discharging", 1.0, 100)])
         with open(path, "a") as fh:
-            fh.write("abgeschnitten\n2026,Discharging,keine-zahl,80,100\n")
+            fh.write("cut off\n2026,Discharging,not-a-number,80,100\n")
         rows, error = b.read_log(path)
         self.assertIsNone(error)
         self.assertEqual(len(rows), 1)
@@ -816,17 +816,17 @@ class Logging(Base):
 
     def test_an_empty_log(self):
         path = self.log([])
-        _zeilen, error = b.read_log(path)
+        _rows, error = b.read_log(path)
         self.assertIn("no readings", error)
 
     def test_the_screen_column_in_both_spellings(self):
         """The panel's DPMS state and - where there is none - the
-        Helligkeit als Zahl."""
+        backlight as a number."""
         rows, _ = b.read_log(self.log(
             [("Discharging", 1.0, "On"), ("Discharging", 1.0, "Off"),
              ("Discharging", 1.0, 700), ("Discharging", 1.0, 0),
              ("Discharging", 1.0, "?")]))
-        self.assertEqual([z["screen"] for z in rows],
+        self.assertEqual([row["screen"] for row in rows],
                          [True, False, True, False, None])
 
     def test_screen_on_and_off_are_two_distributions(self):
@@ -837,7 +837,7 @@ class Logging(Base):
         groups, _wechsel = b.summarise(rows)
         self.assertEqual(len(groups["Discharging"]), 20)
         self.assertEqual(len(groups["Discharging, screen off"]), 10)
-        self.assertEqual(b.quantil(groups["Discharging, screen on"], 0.5), 3.0)
+        self.assertEqual(b.quantile(groups["Discharging, screen on"], 0.5), 3.0)
 
     def test_direction_changes_are_counted(self):
         rows, _ = b.read_log(self.log(
@@ -899,7 +899,7 @@ class Logging(Base):
         self.assertEqual(self.run_cmd("summarize", path)[0], 1)
 
     def test_nonsense_arguments(self):
-        rc, _, err = self.run_cmd("watch", "vielleicht")
+        rc, _, err = self.run_cmd("watch", "maybe")
         self.assertEqual(rc, 2)
         self.assertIn("Usage", err)
 
@@ -942,7 +942,7 @@ class TheLoop(Base):
     def test_the_median_smooths_an_outlier(self):
         for t in (1000, 1005, 1010):
             self.d.tick(now=t)
-        self.battery(ampere=0.1, volt=4.3)          # ein Einbruch: 0.43 W
+        self.battery(ampere=0.1, volt=4.3)          # a dip: 0.43 W
         self.d.tick(now=1015)
         self.assertEqual(self.d.showing[0], "amber")
 
@@ -1093,7 +1093,7 @@ class TheLoop(Base):
         self.d.icon = "battery-level-90-symbolic"
         self.d.cfg["discharging"] = True
         self.battery(status="Discharging", ampere=1.6, volt=3.9, percent=90)
-        self.d.tick(now=1000)              # 6.24 W: Huelle red_at, Stand egal
+        self.d.tick(now=1000)              # 6.24 W: frame red_at, level irrelevant
         self.assertEqual(self.d.showing, ("red", "red"))
 
     def test_and_the_more_urgent_one_wins(self):
@@ -1240,7 +1240,7 @@ class NothingIsOnAfterAnInstall(Base):
     """
 
     def test_every_option_is_off(self):
-        for key in b.SCHALTER:
+        for key in b.SWITCHES:
             self.assertIs(b.DEFAULTS[key], False, key)
 
     def test_a_fresh_config_colours_nothing(self):
@@ -1345,9 +1345,9 @@ class TheTimeInTheLoop(Base):
         median of the window is what goes in the bar."""
         self.battery(status="Discharging", ampere=0.3, avg=300000,
                      charge=self.HAVE, full=self.FULL)
-        for when, sekunden in ((1000, 40072), (1010, 31604), (1020, 36633),
+        for when, seconds in ((1000, 40072), (1010, 31604), (1020, 36633),
                                (1030, 30221), (1040, 38061)):
-            self.d.time_to_empty = sekunden
+            self.d.time_to_empty = seconds
             self.d.tick(now=when)
         self.assertEqual(self.d.runtime(), "10:11")     # the median, 36633 s
 
@@ -1395,9 +1395,9 @@ class TheTimeInTheLoop(Base):
     def test_the_median_smooths_a_spike(self):
         """One reading of half an amp extra must not take two hours off the
         estimate."""
-        for when, strom in ((1000, 0.38), (1010, 0.38), (1020, 0.9),
+        for when, amps in ((1000, 0.38), (1010, 0.38), (1020, 0.9),
                             (1030, 0.38), (1040, 0.38)):
-            self.battery(status="Discharging", ampere=strom,
+            self.battery(status="Discharging", ampere=amps,
                          charge=self.HAVE, full=self.FULL)
             self.d.tick(now=when)
         self.assertEqual(self.d.runtime(), "05:31")
@@ -1440,8 +1440,8 @@ class TheTimeInTheLoop(Base):
         self.d.tick(now=1000)
         self.battery(status="Discharging", ampere=0.3782,
                      charge=self.HAVE, full=self.FULL)
-        spaeter = 1000 + b.DEFAULTS["runtime_window_s"] + 1
-        self.d.tick(now=spaeter)
+        later = 1000 + b.DEFAULTS["runtime_window_s"] + 1
+        self.d.tick(now=later)
         self.assertEqual(self.d.runtime(), "05:33")
 
     def test_an_unreadable_battery_leaves_no_time(self):
@@ -1514,7 +1514,7 @@ class TwoQuestionsTwoSwitches(Base):
         would rearrange itself the moment somebody plugs in."""
         alles_aus = dict(b.DEFAULTS)
         self.assertFalse(b.plugin_wanted(alles_aus))
-        for key in b.SCHALTER:
+        for key in b.SWITCHES:
             self.assertTrue(b.plugin_wanted(dict(alles_aus, **{key: True})),
                             key)
 

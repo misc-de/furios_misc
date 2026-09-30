@@ -202,10 +202,10 @@ def find_icon(name):
     if not name:
         return None
     for root_dir in ICON_DIRS:
-        for teil in ("symbolic/status", "scalable/status", "symbolic/legacy",
+        for subdir in ("symbolic/status", "scalable/status", "symbolic/legacy",
                      "scalable/legacy"):
             for theme in ("Adwaita", "hicolor", ""):
-                path = os.path.join(root_dir, theme, teil, name + ".svg")
+                path = os.path.join(root_dir, theme, subdir, name + ".svg")
                 if os.path.isfile(path):
                     return path
     return None
@@ -257,8 +257,8 @@ def remove_icon_theme(name, root_dir=None):
         path = os.path.join(target, name)
         try:
             with open(path) as fh:
-                inhalt = fh.read()
-            if ICON_MARK not in inhalt and BOLT_MARK not in inhalt:
+                content = fh.read()
+            if ICON_MARK not in content and BOLT_MARK not in content:
                 continue
         except OSError:
             continue
@@ -423,8 +423,8 @@ def upower_seconds():
     forced = os.environ.get("FURIOS_BATTERY_UPOWER_TIME")
     if forced is not None:
         try:
-            voll, leer = (int(x) for x in forced.split(","))
-            return voll, leer
+            full_s, empty_s = (int(x) for x in forced.split(","))
+            return full_s, empty_s
         except ValueError:
             return 0, 0
     try:
@@ -458,13 +458,13 @@ def runtime_hours(reading, ampere=None):
     have, full = reading.get("charge_uah"), reading.get("charge_full_uah")
     if not have or not full:
         return None
-    strom = reading.get("ampere") if ampere is None else ampere
-    if not strom or strom <= 0:
+    amps = reading.get("ampere") if ampere is None else ampere
+    if not amps or amps <= 0:
         return None
     left = (full - have) if reading.get("charging") else have
     if left <= 0:
         return None
-    hours = left / 1e6 / strom
+    hours = left / 1e6 / amps
     return hours if 0 < hours <= MAX_PLAUSIBLE_H else None
 
 
@@ -596,8 +596,8 @@ def time_shown_as(pattern=None, proc="/proc"):
 
 def plugin_setting():
     """The list of status-icon plugins the shell loads."""
-    return Setting(schluessel=PLUGIN_SETTING,
-                   umgebung="FURIOS_BATTERY_PLUGIN_SETTING_FILE")
+    return Setting(key=PLUGIN_SETTING,
+                   env_var="FURIOS_BATTERY_PLUGIN_SETTING_FILE")
 
 
 def plugin_names(setting=None):
@@ -684,12 +684,12 @@ def clear_time(path=None):
 def colour_text(power=None, level=None, colors=None):
     """What the widget reads for one pair: a line per half that has a
     colour, nothing for a half that has none."""
-    farben = colors or COLORS
+    palette = colors or COLORS
     lines = []
     if power:
-        lines.append("frame %s\n" % farben[power])
+        lines.append("frame %s\n" % palette[power])
     if level:
-        lines.append("fill %s\n" % farben[level])
+        lines.append("fill %s\n" % palette[level])
     return "".join(lines)
 
 
@@ -729,7 +729,7 @@ def clear_colour(path=None):
 def shown_colour(path=None):
     """The pair (power, level) the file says, (None, None) for none or for
     anything this program would not have written."""
-    namen = {farbe: name for name, farbe in COLORS.items()}
+    names = {colour: name for name, colour in COLORS.items()}
     pair = {"frame": None, "fill": None}
     try:
         with open(path or COLOUR_STATE) as fh:
@@ -737,13 +737,13 @@ def shown_colour(path=None):
     except (OSError, UnicodeDecodeError):
         return (None, None)
     for line in text.splitlines():
-        teile = line.split()
-        if len(teile) == 2 and teile[0] in pair:
-            pair[teile[0]] = namen.get(teile[1])
+        fields = line.split()
+        if len(fields) == 2 and fields[0] in pair:
+            pair[fields[0]] = names.get(fields[1])
     return (pair["frame"], pair["fill"])
 
 
-# --------------------------------------------------------------- Konfiguration
+# --------------------------------------------------------------- configuration
 
 def load_config(path=None):
     """Defaults, overlaid with whatever is on disk.
@@ -798,7 +798,7 @@ def is_config_write(name, stamp, known):
     return name == os.path.basename(CONFIG) and stamp != known
 
 
-# ------------------------------------------------------------------- Messung
+# ----------------------------------------------------------------- measurement
 
 def _uah(name, base=None):
     """A charge in microampere-hours, or None.
@@ -967,8 +967,8 @@ def wanted_bucket(reading, cfg, current=None, icon=None):
 
 def base_name(name):
     """The user's own theme behind a name that may be one of ours."""
-    treffer = MARK.match(name or "")
-    return treffer.group("base") if treffer else name
+    found = MARK.match(name or "")
+    return found.group("base") if found else name
 
 
 def remove_themes(themes_dir=None, only=None):
@@ -1016,11 +1016,11 @@ class Setting:
     changes are rare by design.
     """
 
-    def __init__(self, file_=None, schluessel=SETTING, umgebung=None):
+    def __init__(self, file_=None, key=SETTING, env_var=None):
         # Tests point this at a file instead of dconf. Nothing else does.
-        self.schluessel = schluessel
+        self.key = key
         self.file_ = file_ or os.environ.get(
-            umgebung or "FURIOS_BATTERY_SETTING_FILE")
+            env_var or "FURIOS_BATTERY_SETTING_FILE")
 
     def get(self):
         if self.file_:
@@ -1030,7 +1030,7 @@ class Setting:
             except OSError:
                 return ""
         try:
-            out = subprocess.run(["gsettings", "get"] + self.schluessel.split(),
+            out = subprocess.run(["gsettings", "get"] + self.key.split(),
                                  capture_output=True, text=True, timeout=10)
         except (OSError, subprocess.SubprocessError):
             return ""
@@ -1043,7 +1043,7 @@ class Setting:
             return True
         try:
             out = subprocess.run(["gsettings", "set"]
-                                 + self.schluessel.split() + [name],
+                                 + self.key.split() + [name],
                                  capture_output=True, text=True, timeout=10)
         except (OSError, subprocess.SubprocessError):
             return False
@@ -1052,8 +1052,8 @@ class Setting:
 
 def icon_setting():
     """The icon-theme key. Its own file in the tests, like the other one."""
-    return Setting(schluessel=ICON_SETTING,
-                   umgebung="FURIOS_BATTERY_ICON_SETTING_FILE")
+    return Setting(key=ICON_SETTING,
+                   env_var="FURIOS_BATTERY_ICON_SETTING_FILE")
 
 
 def percent_setting():
@@ -1061,8 +1061,8 @@ def percent_setting():
 
     Only ever written to put back what an older version changed.
     """
-    return Setting(schluessel=PERCENT_SETTING,
-                   umgebung="FURIOS_BATTERY_PERCENT_SETTING_FILE")
+    return Setting(key=PERCENT_SETTING,
+                   env_var="FURIOS_BATTERY_PERCENT_SETTING_FILE")
 
 
 def load_state(path=None):
@@ -1124,15 +1124,15 @@ def drop_icon_themes(setting=None, root_dir=None):
     setting = setting or icon_setting()
     root = root_dir or ICON_BASE
     try:
-        namen = sorted(n for n in os.listdir(root) if ICON_ANY.match(n))
+        names = sorted(n for n in os.listdir(root) if ICON_ANY.match(n))
     except OSError:
-        namen = []
+        names = []
     current = setting.get() or ""
     if ICON_ANY.match(current):
-        base = (icon_base_theme(current, root_dir) if current in namen
+        base = (icon_base_theme(current, root_dir) if current in names
                 else None)
         setting.set(base or "Adwaita")
-    return sum(remove_icon_theme(name, root_dir) for name in namen)
+    return sum(remove_icon_theme(name, root_dir) for name in names)
 
 
 def clean_up_leftovers(setting=None):
@@ -1162,8 +1162,8 @@ def describe(cfg=None):
     """Everything both front ends show, in one dict."""
     cfg = cfg or load_config()
     reading = read_battery()
-    zeigt, zeigt_stand = shown_colour()
-    stand = wanted_level(reading, cfg, zeigt_stand)
+    shown, shown_level = shown_colour()
+    level = wanted_level(reading, cfg, shown_level)
     # Two names: the one UPower publishes, which is what the direction
     # comes from, and the one phosh actually draws, which is the file that
     # decides whether there are two halves.
@@ -1171,11 +1171,11 @@ def describe(cfg=None):
     agree = sources_agree(reading, reported)
     icon = phosh_icon((reading or {}).get("percent"),
                         (reading or {}).get("charging"))
-    bucket = wanted_bucket(reading, cfg, zeigt, icon)
+    bucket = wanted_bucket(reading, cfg, shown, icon)
     split = icon_is_split(icon, (reading or {}).get("charging"))
     del reported
     if not split:
-        bucket = stand = merge_colours(bucket, stand)
+        bucket = level = merge_colours(bucket, level)
     return {
         "state": (reading or {}).get("status", "unknown"),
         "watt": round((reading or {}).get("watt", 0.0), 2),
@@ -1197,10 +1197,10 @@ def describe(cfg=None):
         "readable": reading is not None,
         "plausible": (reading or {}).get("plausible", False),
         "bucket": bucket or "none",
-        "showing": zeigt or "none",
+        "showing": shown or "none",
         # The filling, which says something else: how full, not how fast.
-        "level_bucket": stand or "none",
-        "level_showing": zeigt_stand or "none",
+        "level_bucket": level or "none",
+        "level_showing": shown_level or "none",
         # Whether this icon has two halves to colour at all.
         "icon": icon or "?",
         "split_icon": split,
@@ -1258,8 +1258,8 @@ def cmd_status(argv):
 
 
 # Which config keys `battctl config` will take, and how to read the value.
-SCHALTER = ("charging", "discharging", "level", "runtime", "charge_time")
-ZAHLEN = ("charge_green_w", "charge_amber_w", "drain_amber_w", "drain_red_w",
+SWITCHES = ("charging", "discharging", "level", "runtime", "charge_time")
+NUMBERS = ("charge_green_w", "charge_amber_w", "drain_amber_w", "drain_red_w",
           "level_amber_pct", "level_red_pct", "level_hysteresis_pct",
           "dwell_s", "window_s", "runtime_window_s", "hysteresis")
 
@@ -1275,24 +1275,24 @@ def cmd_config(argv):
         return 2
     key, value = argv
     key = key.replace("-", "_")
-    if key in SCHALTER:
+    if key in SWITCHES:
         if value not in ("on", "off"):
             print("%s takes on or off." % key, file=sys.stderr)
             return 2
         cfg[key] = value == "on"
-    elif key in ZAHLEN:
+    elif key in NUMBERS:
         try:
-            zahl = float(value)
+            number = float(value)
         except ValueError:
             print("%s takes a number." % key, file=sys.stderr)
             return 2
-        if zahl <= 0:
+        if number <= 0:
             print("%s must be greater than zero." % key, file=sys.stderr)
             return 2
-        cfg[key] = int(zahl) if isinstance(DEFAULTS[key], int) else zahl
+        cfg[key] = int(number) if isinstance(DEFAULTS[key], int) else number
     else:
         print("Unknown setting: %s" % key, file=sys.stderr)
-        print("Known: %s" % " ".join(sorted(SCHALTER + ZAHLEN)), file=sys.stderr)
+        print("Known: %s" % " ".join(sorted(SWITCHES + NUMBERS)), file=sys.stderr)
         return 2
     # Thresholds that cross would make one colour unreachable, and the reason
     # would be two numbers in a file nobody opens.
@@ -1336,9 +1336,9 @@ def cmd_restore(_argv):
     # reset first: it is what puts the percentage back, and it has to read
     # the state file before that file goes.
     cmd_reset([])
-    for datei in (CONFIG, STATE):
+    for path in (CONFIG, STATE):
         try:
-            os.unlink(datei)
+            os.unlink(path)
         except OSError:
             pass
     print("Shipped state: no colour, no time, no config.")
@@ -1436,22 +1436,22 @@ class Daemon:
         if reading is None or not reading["plausible"]:
             return None
         self.samples.append((now, reading["watt"], reading["charging"]))
-        grenze = now - self.cfg["window_s"]
-        self.samples = [s for s in self.samples if s[0] >= grenze]
+        cutoff = now - self.cfg["window_s"]
+        self.samples = [s for s in self.samples if s[0] >= cutoff]
         # The gauge's average where the driver has one, the instantaneous
         # current where it has not.
         self.runtime_samples.append(
             (now, reading.get("ampere_avg") or reading["ampere"],
              reading["charging"]))
-        grenze = now - self.cfg["runtime_window_s"]
+        cutoff = now - self.cfg["runtime_window_s"]
         self.runtime_samples = [s for s in self.runtime_samples
-                                if s[0] >= grenze]
-        stunden = upower_hours(self.time_to_full, self.time_to_empty,
-                               reading["charging"])
-        if stunden is not None:
-            self.upower_samples.append((now, stunden, reading["charging"]))
+                                if s[0] >= cutoff]
+        upower_h = upower_hours(self.time_to_full, self.time_to_empty,
+                                reading["charging"])
+        if upower_h is not None:
+            self.upower_samples.append((now, upower_h, reading["charging"]))
         self.upower_samples = [s for s in self.upower_samples
-                               if s[0] >= grenze]
+                               if s[0] >= cutoff]
         return reading
 
     def decide(self, reading, now=None):
@@ -1505,12 +1505,12 @@ class Daemon:
         reading = self.last_reading if reading is None else reading
         if not time_wanted(reading, self.cfg):
             return None
-        gemeldet = [h for (_, h, c) in self.upower_samples
+        reported = [h for (_, h, c) in self.upower_samples
                     if c == reading["charging"]]
-        hours = median(gemeldet) if gemeldet else None
+        hours = median(reported) if reported else None
         if hours is None:
-            gleich = [a for (_, a, c) in self.runtime_samples
-                      if c == reading["charging"]]
+            same_direction = [a for (_, a, c) in self.runtime_samples
+                              if c == reading["charging"]]
             # One reading is enough to start from, but not to turn on.
             # Measured on 16.9.2026: a single stray Discharging reading
             # between two charging ones put 02:33 into a bar that said 01:27
@@ -1519,9 +1519,10 @@ class Daemon:
             # nothing has contradicted it, and stops counting the moment the
             # window also holds the other direction. At a start, where there
             # is one sample and nothing else at all, the bar still speaks.
-            if len(gleich) < 2 and len(gleich) < len(self.runtime_samples):
+            if (len(same_direction) < 2
+                    and len(same_direction) < len(self.runtime_samples)):
                 return None
-            hours = runtime_hours(reading, median(gleich))
+            hours = runtime_hours(reading, median(same_direction))
         return format_runtime(hours)
 
     def apply(self, pair, now=None):
@@ -1638,12 +1639,12 @@ def cmd_daemon(_argv):
                 daemon.icon = name.get_string() if name else None
                 daemon.time_to_full = cached_int(proxy, "TimeToFull")
                 daemon.time_to_empty = cached_int(proxy, "TimeToEmpty")
-            geaendert = daemon.tick()
+            changed = daemon.tick()
             # After the tick, so it draws this reading and not the one
             # before it; outside the `if`, because the time moves on every
             # reading while the colour moves on very few.
             follow_plugin()
-            if geaendert:
+            if changed:
                 print("frame %s, filling %s"
                       % (daemon.showing[0] or "plain",
                          daemon.showing[1] or "plain"), flush=True)
@@ -1693,9 +1694,9 @@ def cmd_daemon(_argv):
     # The DIRECTORY, not the file: save_config writes beside the target and
     # renames, so the inode changes with every write and a monitor on the
     # file itself would follow the old one into nowhere.
-    def config_written(_monitor, geaendert, _other, _event):
+    def config_written(_monitor, changed_file, _other, _event):
         try:
-            if not is_config_write(geaendert.get_basename(),
+            if not is_config_write(changed_file.get_basename(),
                                    daemon._stamp(), daemon.cfg_stamp):
                 return
             wake_up()
@@ -1708,8 +1709,8 @@ def cmd_daemon(_argv):
     # and never notices a thing.
     try:
         os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
-        ordner = Gio.File.new_for_path(os.path.dirname(CONFIG))
-        config_monitor = ordner.monitor_directory(Gio.FileMonitorFlags.NONE,
+        folder = Gio.File.new_for_path(os.path.dirname(CONFIG))
+        config_monitor = folder.monitor_directory(Gio.FileMonitorFlags.NONE,
                                                   None)
         config_monitor.connect("changed", config_written)
     except (GLib.Error, OSError) as error:
@@ -1746,7 +1747,7 @@ def now_iso():
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 
 
-def quantil(values, fraction):
+def quantile(values, fraction):
     if not values:
         return None
     s = sorted(values)
@@ -1769,14 +1770,14 @@ def cmd_watch(argv):
     seconds, gap, target = 3600.0, 5.0, None
     rest = list(argv)
     while rest:
-        wort = rest.pop(0)
-        if wort in ("--csv", "-o") and rest:
+        arg = rest.pop(0)
+        if arg in ("--csv", "-o") and rest:
             target = rest.pop(0)
-        elif wort in ("--interval", "-i") and rest:
+        elif arg in ("--interval", "-i") and rest:
             gap = float(rest.pop(0))
         else:
             try:
-                seconds = float(wort)
+                seconds = float(arg)
             except ValueError:
                 print("Usage: battctl watch [seconds] [--interval s] "
                       "[--csv file]", file=sys.stderr)
@@ -1830,7 +1831,7 @@ def cmd_watch(argv):
             continue
         print("\n%s: %d readings" % (state, len(values)))
         for name, fraction in (("median", 0.5), ("p90", 0.9), ("p98", 0.98)):
-            print("  %-7s %5.2f W" % (name, quantil(values, fraction)))
+            print("  %-7s %5.2f W" % (name, quantile(values, fraction)))
         print("  %-7s %5.2f W" % ("max", max(values)))
         if state == "Discharging":
             print("  A starting point: amber at p90, red at p98 - so that "
@@ -1842,14 +1843,14 @@ def read_log(path):
     """The rows of a `battctl watch` log. Returns (rows, error)."""
     try:
         with open(path) as fh:
-            roh = fh.read().splitlines()
+            raw_lines = fh.read().splitlines()
     except OSError as error:
         return [], str(error)
     rows = []
-    for line in roh:
+    for line in raw_lines:
         parts = line.split(",")
         if len(parts) < 5 or parts[0] == "time":
-            continue                      # Kopfzeile, oder abgeschnitten
+            continue                      # header, or cut off
         try:
             watt = float(parts[2])
         except ValueError:
@@ -1857,16 +1858,16 @@ def read_log(path):
         # Two shapes, because the column has had two: the panel's DPMS
         # state ("On"/"Off") and, on a device without that node, the
         # backlight number. Anything else is "do not know".
-        roh_licht = parts[4].strip()
-        if roh_licht in ("On", "Off"):
-            licht = roh_licht == "On"
+        raw_screen = parts[4].strip()
+        if raw_screen in ("On", "Off"):
+            screen = raw_screen == "On"
         else:
             try:
-                licht = int(roh_licht) > 0
+                screen = int(raw_screen) > 0
             except ValueError:
-                licht = None
+                screen = None
         rows.append({"time_": parts[0], "state": parts[1], "watt": watt,
-                       "percent": parts[3], "screen": licht})
+                       "percent": parts[3], "screen": screen})
     if not rows:
         return [], "no readings in " + path
     return rows, None
@@ -1882,8 +1883,8 @@ def summarise(rows):
     """
     groups = {}
     for line in rows:
-        schluessel = line["state"]
-        groups.setdefault(schluessel, []).append(line["watt"])
+        key = line["state"]
+        groups.setdefault(key, []).append(line["watt"])
         if line["state"] == "Discharging" and line["screen"] is not None:
             whither = ("Discharging, screen on" if line["screen"]
                      else "Discharging, screen off")
@@ -1905,8 +1906,8 @@ def suggestion(values):
     """
     if len(values) < 30:
         return None
-    amber_at = round(quantil(values, 0.9), 1)
-    red_at = round(quantil(values, 0.98), 1)
+    amber_at = round(quantile(values, 0.9), 1)
+    red_at = round(quantile(values, 0.98), 1)
     if amber_at <= 0 or red_at <= amber_at:
         return None
     return amber_at, red_at
@@ -1914,11 +1915,11 @@ def suggestion(values):
 
 def cmd_summarise(argv):
     path, apply_it = None, False
-    for wort in argv:
-        if wort == "--apply":
+    for arg in argv:
+        if arg == "--apply":
             apply_it = True
-        elif not wort.startswith("-") and path is None:
-            path = wort
+        elif not arg.startswith("-") and path is None:
+            path = arg
         else:
             print("Usage: battctl summarise <log.csv> [--apply]",
                   file=sys.stderr)
@@ -1941,18 +1942,18 @@ def cmd_summarise(argv):
     for name in sorted(groups):
         values = groups[name]
         print("\n%s: %d readings" % (name, len(values)))
-        for wort, fraction in (("median", 0.5), ("p90", 0.9), ("p98", 0.98)):
-            print("  %-7s %5.2f W" % (wort, quantil(values, fraction)))
+        for label, fraction in (("median", 0.5), ("p90", 0.9), ("p98", 0.98)):
+            print("  %-7s %5.2f W" % (label, quantile(values, fraction)))
         print("  %-7s %5.2f W" % ("max", max(values)))
 
     # The thresholds come from the screen-on half, and from nothing else.
-    massgeblich = groups.get("Discharging, screen on") or []
-    suggestion_ = suggestion(massgeblich)
+    screen_on = groups.get("Discharging, screen on") or []
+    suggestion_ = suggestion(screen_on)
     print()
     if suggestion_ is None:
         print("Not enough to set a threshold from: %d readings with the "
               "screen on. Use the phone on battery for a while and run the "
-              "log again." % len(massgeblich))
+              "log again." % len(screen_on))
         return 1
     amber_at, red_at = suggestion_
     print("Suggested: drain_amber_w %.1f (p90), drain_red_w %.1f (p98)"
@@ -2027,14 +2028,14 @@ def main(argv=None):
     if not argv or argv[0] in ("-h", "--help", "help"):
         print(USAGE, end="")
         return 0
-    befehl, rest = argv[0], argv[1:]
+    command, rest = argv[0], argv[1:]
     for name, fn in (("status", cmd_status), ("config", cmd_config),
                      ("daemon", cmd_daemon), ("reset", cmd_reset),
                      ("restore", cmd_restore), ("watch", cmd_watch),
                      ("summarise", cmd_summarise), ("summarize", cmd_summarise)):
-        if befehl == name:
+        if command == name:
             return fn(rest)
-    print("Unknown command: %s" % befehl, file=sys.stderr)
+    print("Unknown command: %s" % command, file=sys.stderr)
     print(USAGE, end="", file=sys.stderr)
     return 2
 
