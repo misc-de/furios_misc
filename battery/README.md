@@ -176,6 +176,24 @@ is on and taken out again when none is, and the rest of the list is left
 alone. `battctl restore` takes all of that back, `./uninstall.sh` the
 program as well.
 
+**What was there before is written down before the first change**, and
+putting back reads that note instead of assuming what a new phone has:
+
+| Record | Written | What it holds | Read by |
+|---|---|---|---|
+| `~/.config/furios-battery/state.json`, key `plugins_before` | by the daemon, before it first adds its entry to `status-icons` | whether the key was set at all (a key written with the default is pinned, an unset one follows updates) and the list it held | `battctl reset` / `restore` / `unlist`, and so both `uninstall.sh` |
+| `~/.config/furios-battery/install-record/` | by `install.sh`, first run | per installed file: nothing there / somebody else's file (a copy in `saved/`) / ours from an install before records existed, plus the checksum of what was installed | `uninstall.sh` |
+
+Neither is rewritten by a second run. Putting back only touches what is still
+ours: a plugin list somebody changed since keeps their change (only our entry
+goes), a file somebody edited since stays, and both say so. Without a record -
+installed or listed before 30.9.2026 - the old behaviour applies (our entry
+out and the key reset if the rest is the shipped list; files removed by name),
+and that is said too. The same goes for the leftovers of versions before
+24.9.2026 (themes, icon theme, the percentage): no record of what was there
+before them exists except `percent_was`, so they are put back to the user's
+own theme inside our name, to Adwaita, and to the recorded percentage value.
+
 **Everything is off after an install.** The tool arrives on the phone; what
 the phone looks like stays the user's decision, one switch at a time.
 

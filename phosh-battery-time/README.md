@@ -178,3 +178,14 @@ type from; without either, or without phosh's headers, it says so and skips.
 Takes it out of the `status-icons` list first — a shell told to load a plugin
 that is gone logs a warning on every start — and then out of the plugin
 directory.
+
+Both go back to what was there before, from a record rather than a guess.
+The list through `battctl unlist`, which restores what battctl wrote down
+before its first change (see [battery](../battery/README.md#what-it-touches)):
+an unset key is reset, a list somebody had comes back exactly. The two files
+through the install record `install.sh` writes before `make install`, in
+`~/.config/furios-battery-time/install-record/` (reading `/usr/lib` needs no
+root): removed where nothing was, somebody else's file put back where there
+was one, and left alone — with a message — where they changed since. An
+install from before 30.9.2026 has no record and is removed by name, as
+before, and `uninstall.sh` says so.
