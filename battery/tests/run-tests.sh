@@ -22,6 +22,7 @@ run() {
 
 run "battctl: readings, thresholds, themes, daemon" python3 "$HERE/test-battctl.py"
 run "the restart policy of the unit" bash "$HERE/test-restart-policy.sh"
+run "uninstall.sh leaves the phone as install.sh found it" bash "$HERE/test-uninstall.sh"
 
 printf '\n\033[1m== shell\033[0m\n'
 if command -v shellcheck >/dev/null; then

@@ -22,17 +22,28 @@ if command -v gsettings >/dev/null; then
     current=$(gsettings get $KEY 2>/dev/null || echo "@as []")
     if [ "$current" != "${current/$PLUGIN/}" ]; then
         python3 - "$PLUGIN" <<'PY' || true
-import subprocess, sys, ast
+import ast, os, subprocess, sys
 key = ["mobi.phosh.shell.plugins", "status-icons"]
-out = subprocess.run(["gsettings", "get"] + key, capture_output=True, text=True)
-text = out.stdout.strip()
-if text.startswith("@as "):
-    text = text[4:]
+def names(env=None):
+    out = subprocess.run(["gsettings", "get"] + key, capture_output=True,
+                         text=True, env=env)
+    text = out.stdout.strip()
+    if text.startswith("@as "):
+        text = text[4:]
+    return ast.literal_eval(text)
 try:
-    names = [n for n in ast.literal_eval(text) if n != sys.argv[1]]
+    rest = [n for n in names() if n != sys.argv[1]]
+    # The memory backend answers with the schema's default: no dconf behind it.
+    shipped = names(dict(os.environ, GSETTINGS_BACKEND="memory"))
 except (ValueError, SyntaxError):
     sys.exit(0)
-subprocess.run(["gsettings", "set"] + key + [str(names)], check=False)
+# Back to the shipped list means the key goes, rather than staying behind as
+# a copy of the default - a copy a new phone does not have, and one that
+# would stop following the default when an update changes it.
+if rest == shipped:
+    subprocess.run(["gsettings", "reset"] + key, check=False)
+else:
+    subprocess.run(["gsettings", "set"] + key + [str(rest)], check=False)
 PY
     fi
 fi

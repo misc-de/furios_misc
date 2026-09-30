@@ -547,6 +547,32 @@ class TheSetting(Base):
         self.assertIn("set org.gnome.desktop.interface gtk-theme "
                       "adw-gtk3-batt-green", rows)
 
+    def _gsettings_with_default(self, current, shipped):
+        """A gsettings whose memory backend - the schema default - says
+        something else than the user's value, as the real one does."""
+        calls = self._fake_gsettings()
+        os.environ.pop("FURIOS_BATTERY_PLUGIN_SETTING_FILE", None)
+        with open(os.path.join(self.tmp, "bin", "gsettings"), "w") as fh:
+            fh.write("#!/bin/sh\n"
+                     "echo \"$@\" >> %s/calls\n"
+                     'if [ "$1" = get ]; then\n'
+                     '  if [ "$GSETTINGS_BACKEND" = memory ]; then echo "%s";'
+                     ' else echo "%s"; fi\n'
+                     "fi\n" % (self.tmp, shipped, current))
+        return calls
+
+    def test_putting_back_the_default_resets_the_key(self):
+        """Not a copy of the default in dconf: a new phone has none."""
+        calls = self._gsettings_with_default("@as []", "@as []")
+        self.assertTrue(b.plugin_setting().set("@as []"))
+        self.assertIn("reset mobi.phosh.shell.plugins status-icons",
+                      open(calls).read())
+
+    def test_a_value_other_than_the_default_stays_set(self):
+        calls = self._gsettings_with_default("['x']", "@as []")
+        self.assertTrue(b.plugin_setting().set("['x']"))
+        self.assertNotIn("reset", open(calls).read())
+
     def test_a_failed_gsettings_says_so(self):
         self._fake_gsettings(rc=3)
         self.assertFalse(b.Setting().set("whatever"))
@@ -723,6 +749,19 @@ class Commands(Base):
         self.assertEqual(self.shown(), (None, None))
         self.assertFalse(os.path.exists(b.CONFIG))
         self.assertEqual(b.load_config(), b.DEFAULTS)
+
+    def test_restore_leaves_no_temporary_file_and_no_directory(self):
+        folder = os.path.join(self.tmp, "furios-battery")
+        b.CONFIG = os.path.join(folder, "config.json")
+        b.STATE = os.path.join(folder, "state.json")
+        b.save_config(dict(b.DEFAULTS, discharging=True))
+        for path in (b.CONFIG + ".new", b.STATE + ".new",
+                     b.COLOUR_STATE + ".new", b.PLUGIN_STATE + ".new"):
+            with open(path, "w") as fh:
+                fh.write("{}\n")
+        self.assertEqual(self.run_cmd("restore")[0], 0)
+        self.assertFalse(os.path.exists(folder))
+        self.assertEqual([n for n in os.listdir(self.tmp) if n.endswith(".new")], [])
 
     def test_restore_with_nothing_there(self):
         rc, _, _ = self.run_cmd("restore")
