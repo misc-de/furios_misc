@@ -626,6 +626,34 @@ class Config(Base):
         self.assertEqual(b.load_config(), b.DEFAULTS)
 
 
+class StatusText(Base):
+    """modemctl's form: headings, ok / FAIL / warn / -- per line, no colour
+    without a terminal, and failure only for what is on and does not work."""
+
+    def test_readable_battery(self):
+        self.battery(status="Discharging", ampere=-0.5, volt=3.9, percent=63)
+        rc, out, _ = self.run_cmd("status")
+        self.assertEqual(rc, 0)
+        self.assertIn("== battery", out)
+        self.assertIn("  ok    Discharging, 63 %", out)
+        self.assertIn("== colour", out)
+        self.assertNotIn("\033[", out)
+        self.assertIn("everything that is switched on is in place", out)
+
+    def test_off_is_not_a_failure(self):
+        self.battery(status="Discharging", ampere=-0.5, volt=3.9)
+        self.run_cmd("config", "level", "off")
+        rc, out, _ = self.run_cmd("status")
+        self.assertEqual(rc, 0)
+        self.assertIn("  --    off - filling:", out)
+
+    def test_unreadable_battery_fails(self):
+        rc, out, _ = self.run_cmd("status")
+        self.assertEqual(rc, 1)
+        self.assertIn("  FAIL  not readable", out)
+        self.assertIn("1 problem(s)", out)
+
+
 class Commands(Base):
     def test_help_(self):
         for arg in ([], ["--help"], ["help"]):
@@ -642,7 +670,7 @@ class Commands(Base):
         self.battery(ampere=1.9, volt=4.2)
         rc, out, _ = self.run_cmd("status")
         self.assertEqual(rc, 0)
-        self.assertIn("state:        Charging", out)
+        self.assertIn("  ok    Charging, 80 %", out)
         self.assertIn("7.98 W", out)
 
     def test_status_without_a_battery(self):
@@ -667,13 +695,13 @@ class Commands(Base):
         self.battery(ampere=0.2, volt=4.2)
         b.show_colour("green", None)
         _, out, _ = self.run_cmd("status")
-        self.assertIn("frame:        green", out)
+        self.assertIn("  --    frame green (", out)
 
     def test_status_says_what_shows_it(self):
         self.battery()
         b.save_config(self.cfg_on())
         _, out, _ = self.run_cmd("status")
-        self.assertIn("shown by:     nothing - the widget is not installed", out)
+        self.assertIn("  FAIL  nothing - the widget is not installed", out)
 
     def test_config_shows_everything(self):
         rc, out, _ = self.run_cmd("config")

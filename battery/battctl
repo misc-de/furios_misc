@@ -1344,40 +1344,93 @@ def cmd_status(argv):
         print(json.dumps(state, indent=2, sort_keys=True))
         return 0 if state["readable"] else 1
     cfg = state["config"]
-    print("state:        %s" % state["state"])
+    rep = Report()
+
+    rep.head("battery")
+    pct = "?" if state["percent"] is None else "%d %%" % int(state["percent"])
     if state["readable"]:
-        print("power:        %.2f W (%.3f A at %.3f V)"
-              % (state["watt"], state["ampere"], state["volt"]))
+        rep.ok("%s, %s" % (state["state"], pct))
+        rep.ok("%.2f W (%.3f A at %.3f V)"
+               % (state["watt"], state["ampere"], state["volt"]))
     else:
-        print("power:        not readable (%s)" % SYSFS)
-    print("frame:        %s (would be %s)" % (state["showing"], state["bucket"]))
-    print("filling:      %s (would be %s) at %s %%"
-          % (state["level_showing"], state["level_bucket"],
-             "?" if state["percent"] is None else int(state["percent"])))
-    print("icon:         %s%s" % (state["icon"],
-          "" if state["split_icon"]
-          else " - one shape, so both halves take the same colour"))
+        rep.bad("not readable (%s)" % SYSFS)
     if not state["sources_agree"]:
-        print("             ! the kernel says %s and UPower draws the other "
-              "one - no colour for the frame until they agree"
-              % state["state"].lower())
-    print("charging:     %s (green from %.1f W, amber from %.1f W)"
-          % ("on" if cfg["charging"] else "off",
-             cfg["charge_green_w"], cfg["charge_amber_w"]))
-    print("discharging:  %s (white below %.1f W, amber from there, red "
-          "from %.1f W)"
-          % ("on" if cfg["discharging"] else "off",
-             cfg["drain_amber_w"], cfg["drain_red_w"]))
-    print("filling:      %s (plain above %d %%, amber below, red below %d %%)"
-          % ("on" if cfg["level"] else "off",
-             int(cfg["level_amber_pct"]), int(cfg["level_red_pct"])))
-    print("time left:    %s (on battery)" % ("on" if cfg["runtime"] else "off"))
-    print("charge time:  %s (on a cable)" % ("on" if cfg["charge_time"] else "off"))
-    print("would show:   %s"
-          % (state["runtime"] or "no time for this state"))
+        rep.warn("the kernel says %s and UPower draws the other one - no "
+                 "colour for the frame until they agree" % state["state"].lower())
+
+    rep.head("colour")
+    def switch(on, text):
+        (rep.ok if on else rep.skip)(("on - " if on else "off - ") + text)
+    switch(cfg["charging"], "charging: green from %.1f W, amber from %.1f W"
+           % (cfg["charge_green_w"], cfg["charge_amber_w"]))
+    switch(cfg["discharging"], "discharging: white below %.1f W, amber from "
+           "there, red from %.1f W" % (cfg["drain_amber_w"], cfg["drain_red_w"]))
+    switch(cfg["level"], "filling: plain above %d %%, amber below, red below %d %%"
+           % (int(cfg["level_amber_pct"]), int(cfg["level_red_pct"])))
+    rep.skip("frame %s (would be %s), filling %s (would be %s)"
+             % (state["showing"], state["bucket"], state["level_showing"],
+                state["level_bucket"]))
+    rep.skip("icon %s%s" % (state["icon"], "" if state["split_icon"]
+             else " - one shape, so both halves take the same colour"))
+
+    rep.head("time")
+    switch(cfg["runtime"], "time left on battery")
+    switch(cfg["charge_time"], "charge time on a cable")
+    rep.skip("would show %s" % (state["runtime"] or "no time for this state"))
+
     if plugin_wanted(cfg):
-        print("shown by:     %s" % state["shown_by"])
-    return 0 if state["readable"] else 1
+        rep.head("widget")
+        shown = state["shown_by"]
+        if shown.startswith("the widget"):
+            rep.ok("shown by %s" % shown)
+        elif "installed but" in shown:
+            rep.warn(shown)
+        else:
+            rep.bad(shown)
+
+    return rep.summary("everything that is switched on is in place",
+                       "see above - nothing here is fixed by a command")
+
+
+class Report:
+    """The status lines every misc-de ctl prints, modemctl's form: a heading
+    per part, ok / FAIL / warn / -- in front of each line, colour only when
+    somebody is watching, and a closing line. The exit code says whether
+    something switched on does not work - not whether something is off."""
+
+    def __init__(self):
+        tty = sys.stdout.isatty()
+        self.c = ({"ok": "\033[32m", "bad": "\033[31m", "warn": "\033[33m",
+                   "b": "\033[1m", "0": "\033[0m"} if tty else
+                  dict.fromkeys(("ok", "bad", "warn", "b", "0"), ""))
+        self.problems = 0
+        self.first = True
+
+    def head(self, text):
+        print("%s%s== %s%s" % ("" if self.first else "\n", self.c["b"], text,
+                               self.c["0"]))
+        self.first = False
+
+    def ok(self, text):
+        print("  %sok%s    %s" % (self.c["ok"], self.c["0"], text))
+
+    def bad(self, text):
+        print("  %sFAIL%s  %s" % (self.c["bad"], self.c["0"], text))
+        self.problems += 1
+
+    def warn(self, text):
+        print("  %swarn%s  %s" % (self.c["warn"], self.c["0"], text))
+
+    def skip(self, text):
+        print("  --    %s" % text)
+
+    def summary(self, fine, fix):
+        print()
+        if not self.problems:
+            print(fine)
+            return 0
+        print("%d problem(s) - %s" % (self.problems, fix))
+        return 1
 
 
 # Which config keys `battctl config` will take, and how to read the value.
