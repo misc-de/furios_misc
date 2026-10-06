@@ -165,8 +165,9 @@ is in a header we have, so the test registers those two names itself and
 checks what the plugin does with them — the battery's priority comes down to
 meet it, no other icon is touched, the colour lands on the battery's image
 and on no other widget (not even our own label), a file that is not a colour
-leaves the battery plain, and the battery has its priority and its own
-colour back when the widget goes.
+leaves the battery plain, a battery the shell rebuilds is placed beside
+and coloured again, and the battery has its priority and its own colour
+back when the widget goes.
 
 Needs a display to build a GTK widget on, and phosh's library to derive the
 type from; without either, or without phosh's headers, it says so and skips.

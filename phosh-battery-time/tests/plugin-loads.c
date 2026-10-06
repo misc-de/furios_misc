@@ -591,6 +591,35 @@ main (int argc, char *argv[])
     gtk_widget_destroy (window);
   }
 
+  /* phosh builds a new battery icon while we live: the old one is
+     destroyed, a new one goes into the box. Placed once is not placed
+     for good - the new battery has to come down to meet us and take the
+     colour, or the time stands apart and the battery goes plain. */
+  {
+    GtkWidget *rebuilt = g_object_new (battery_type, NULL);
+    GtkWidget *rebuilt_image;
+    gint64 deadline;
+
+    gtk_widget_destroy (battery);
+    gtk_container_add (GTK_CONTAINER (box), rebuilt);
+    battery = rebuilt;
+    rebuilt_image = image_of (rebuilt);
+    battery_image = rebuilt_image;
+
+    deadline = g_get_monotonic_time () + 2 * G_USEC_PER_SEC;
+    while (g_get_monotonic_time () < deadline &&
+           priority_of (rebuilt) != DEFAULT_PRIORITY - 1) {
+      g_main_context_iteration (NULL, FALSE);
+      g_usleep (10 * 1000);
+    }
+    check_int ("a rebuilt battery comes down to meet it again",
+               priority_of (rebuilt), DEFAULT_PRIORITY - 1);
+    check_true ("and takes the colour again",
+                rebuilt_image != NULL && colour_settles_to (rebuilt_image, &red));
+    check_int ("and still no other icon is touched",
+               priority_of (other), DEFAULT_PRIORITY);
+  }
+
   /* Switched off, or the panel torn down: the shell must be left as we
      found it. */
   /* phosh takes an icon out of its box in three steps - find its index,

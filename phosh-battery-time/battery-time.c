@@ -138,6 +138,14 @@ typedef struct {
   /* Destroyed: a placement still queued for an idle must not lower the
      battery again after its priority went back. */
   gboolean      gone;
+
+  /* The box we stand in and the battery we were placed beside - weak, so
+     each turns NULL when the shell frees it. phosh may build a new battery
+     icon while we live, and the box saying a child came or went is how we
+     notice: placement and colour are then done again on the new one. */
+  GtkWidget    *box;
+  GObject      *beside;
+  gboolean      recheck_queued;
 } FuriosBatteryTimeData;
 
 
@@ -282,6 +290,15 @@ stop_watching (FuriosBatteryTimeData *data)
 
 
 static void
+stop_watching_the_box (FuriosBatteryTimeData *data)
+{
+  if (data->box)
+    g_signal_handlers_disconnect_by_data (data->box, data->self);
+  g_clear_weak_pointer (&data->box);
+}
+
+
+static void
 on_destroy (GtkWidget *self)
 {
   FuriosBatteryTimeData *data = get_data (self);
@@ -289,6 +306,8 @@ on_destroy (GtkWidget *self)
   if (data) {
     data->gone = TRUE;
     stop_watching (data);
+    stop_watching_the_box (data);
+    g_clear_weak_pointer (&data->beside);
     give_the_battery_its_priority_back (data);
     uncolour_the_battery (data);
   }
@@ -301,6 +320,8 @@ data_free (gpointer user_data)
   FuriosBatteryTimeData *data = user_data;
 
   stop_watching (data);
+  stop_watching_the_box (data);
+  g_clear_weak_pointer (&data->beside);
   give_the_battery_its_priority_back (data);
   uncolour_the_battery (data);
   g_clear_pointer (&data->coloured, g_ptr_array_unref);
@@ -696,6 +717,8 @@ on_battery_icon_changed (GtkWidget *image, GParamSpec *pspec,
 }
 
 
+static void watch_the_box (GtkWidget *self, GtkWidget *box);
+
 /*
  * Take the place immediately in front of the battery, once, as soon as the
  * shell has put us in its box.
@@ -724,6 +747,7 @@ take_place_beside_the_battery (GtkWidget *self)
   box = gtk_widget_get_ancestor (self, box_type);
   if (box == NULL)
     return;                     /* not in the bar yet - asked again later */
+  watch_the_box (self, box);
 
   /* No battery yet is asked again: the shell may fill its box after it has
      put us in. Found, this is the one attempt there is going to be. */
@@ -731,6 +755,7 @@ take_place_beside_the_battery (GtkWidget *self)
   if (battery == NULL)
     return;
   data->placed = TRUE;
+  g_set_weak_pointer (&data->beside, battery);
 
   colour_the_battery (data, battery);
   update_colour (self);
@@ -753,6 +778,73 @@ take_place_beside_the_battery (GtkWidget *self)
     g_object_set (self, "priority", OUR_PRIORITY + 1, NULL);
     g_object_set (self, "priority", OUR_PRIORITY, NULL);
   }
+}
+
+
+/*
+ * The box says a child came or went. Whether that was our battery is only
+ * clear once the shell has finished - a rebuild takes the old icon out and
+ * puts the new one in, possibly inside a revealer that gets its child later
+ * - so the look is taken from an idle, never from inside the box's own add
+ * or remove (see give_the_battery_its_priority_back for what a priority
+ * changed in there does).
+ *
+ * Still the same battery: nothing to do. Gone or replaced: what we did to
+ * the old one is undone - its priority goes back if it is still in a bar,
+ * its images lose our stylesheet and our references - and the place is
+ * taken again beside whatever battery there is now.
+ */
+static gboolean
+on_idle_recheck (gpointer self)
+{
+  FuriosBatteryTimeData *data = get_data (self);
+  GObject *battery = NULL;
+
+  if (data == NULL || data->gone)
+    return G_SOURCE_REMOVE;
+  data->recheck_queued = FALSE;
+
+  if (data->placed) {
+    if (data->box)
+      gtk_container_foreach (GTK_CONTAINER (data->box), look_at_child, &battery);
+    if (battery != NULL && battery == data->beside)
+      return G_SOURCE_REMOVE;
+
+    give_the_battery_its_priority_back (data);
+    uncolour_the_battery (data);
+    g_clear_weak_pointer (&data->beside);
+    data->placed = FALSE;
+  }
+  take_place_beside_the_battery (self);
+
+  return G_SOURCE_REMOVE;
+}
+
+
+static void
+on_box_children_changed (GtkWidget *self, GtkWidget *child)
+{
+  FuriosBatteryTimeData *data = get_data (self);
+
+  if (data == NULL || data->gone || data->recheck_queued || child == self)
+    return;
+  data->recheck_queued = TRUE;
+  g_idle_add_full (G_PRIORITY_DEFAULT_IDLE, on_idle_recheck,
+                   g_object_ref (self), g_object_unref);
+}
+
+
+static void
+watch_the_box (GtkWidget *self, GtkWidget *box)
+{
+  FuriosBatteryTimeData *data = get_data (self);
+
+  if (data->box == box)
+    return;
+  stop_watching_the_box (data);
+  g_set_weak_pointer (&data->box, box);
+  g_signal_connect_swapped (box, "add", G_CALLBACK (on_box_children_changed), self);
+  g_signal_connect_swapped (box, "remove", G_CALLBACK (on_box_children_changed), self);
 }
 
 
