@@ -604,11 +604,28 @@ main (int argc, char *argv[])
                                           G_CALLBACK (count_notify), &during);
 
     gtk_widget_destroy (widget);
-    g_object_unref (widget);
     check_int ("while it goes, the battery's priority is not touched", during, 0);
     for (int i = 0; i < 50 && priority_of (battery) != DEFAULT_PRIORITY; i++)
       g_main_context_iteration (NULL, FALSE);
     g_signal_handler_disconnect (battery, id);
+  }
+
+  /* Destroyed is not finalized: whoever still holds a reference keeps the
+     instance - and with it the directory monitor - alive. A time written
+     then must not reach it: it would show a widget GTK has already taken
+     apart, inside the shell. The reference this test holds stands in for
+     the shell's. */
+  {
+    gint64 until = g_get_monotonic_time () + G_USEC_PER_SEC / 2;
+
+    write_file (state, "05:55\n", 6);
+    while (g_get_monotonic_time () < until) {
+      g_main_context_iteration (NULL, FALSE);
+      g_usleep (10 * 1000);
+    }
+    check_true ("once destroyed, a new time wakes nothing",
+                !gtk_widget_get_visible (widget));
+    g_object_unref (widget);
   }
   check_int ("and when it goes, the battery has its priority back",
              priority_of (battery), DEFAULT_PRIORITY);

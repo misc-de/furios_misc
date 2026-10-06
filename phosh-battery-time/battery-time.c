@@ -265,6 +265,22 @@ uncolour_the_battery (FuriosBatteryTimeData *data)
 }
 
 
+/* The monitor goes with the widget, not with the instance. Somebody may
+   hold a reference past the destroy, and until the last one goes the
+   monitor would keep calling into a widget GTK has taken apart - its label
+   already freed, and gtk_widget_show on what is left. */
+static void
+stop_watching (FuriosBatteryTimeData *data)
+{
+  if (data->monitor == NULL)
+    return;
+
+  g_signal_handlers_disconnect_by_data (data->monitor, data->self);
+  g_file_monitor_cancel (data->monitor);
+  g_clear_object (&data->monitor);
+}
+
+
 static void
 on_destroy (GtkWidget *self)
 {
@@ -272,6 +288,7 @@ on_destroy (GtkWidget *self)
 
   if (data) {
     data->gone = TRUE;
+    stop_watching (data);
     give_the_battery_its_priority_back (data);
     uncolour_the_battery (data);
   }
@@ -283,11 +300,11 @@ data_free (gpointer user_data)
 {
   FuriosBatteryTimeData *data = user_data;
 
+  stop_watching (data);
   give_the_battery_its_priority_back (data);
   uncolour_the_battery (data);
   g_clear_pointer (&data->coloured, g_ptr_array_unref);
   g_clear_object (&data->provider);
-  g_clear_object (&data->monitor);
   g_clear_object (&data->colour_file);
   g_clear_object (&data->file);
   g_free (data);
@@ -787,7 +804,7 @@ on_changed (GtkWidget         *self,
 {
   FuriosBatteryTimeData *data = get_data (self);
 
-  if (data == NULL || file == NULL)
+  if (data == NULL || data->gone || file == NULL)
     return;
 
   if (g_file_equal (file, data->file))
